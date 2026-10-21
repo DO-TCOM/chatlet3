@@ -127,7 +127,10 @@ const KEY_CONFIG = 'config';
 
 /* ─────────────────────────── Utilitaires ─────────────────────────── */
 
-const HASH_RE = /^[a-f0-9]{32,128}$/i;
+/* Format de mot de passe : 16 a 128 caracteres imprimables sans espace.
+   Accepte les hex de 60/64 caracteres (MOT_DE_PASSE_NUL partagere avec le VPS)
+   comme les mots de passe generes (24 caracteres mixtes). */
+const HASH_RE = /^[!-~]{16,128}$/;
 
 function b64url(buf) {
   return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
