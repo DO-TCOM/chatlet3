@@ -1,0 +1,21 @@
+{
+  "name": "chaltet",
+  "version": "3.0.0",
+  "description": "Chaltet — appels video, audio & chat peer-to-peer. Sans compte, sans telechargement.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "redis": "^5.11.0",
+    "socket.io": "^4.8.3"
+  }
+}

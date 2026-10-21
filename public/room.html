@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chaltet</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0"/>
+    <meta name="description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted."/>
+    
+    <!-- Meta Tags -->
+    <meta itemprop="name" content="Chaltet">
+    <meta itemprop="description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted.">
+    <meta property="og:title" content="Chaltet">
+    <meta property="og:description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted.">
+    <meta property="og:site_name" content="Chaltet">
+    <meta property="og:type" content="website">
+    
+    <!-- Links -->
+    <link rel="manifest" href="manifest.json">
+    <link href="fonts.css" rel="stylesheet">
+    <link href="client.css" rel="stylesheet">
+</head>
+<body class="client" itemscope itemtype="http://schema.org/WebPage">
+    <!-- Background Layer -->
+    <div class="layer background"></div>
+
+    <!-- Welcome Layer -->
+    <div class="layer welcome">
+        <div class="content">
+            <h1 class="h1 title">Chaltet</h1>
+            <small class="small">You are about to join room</small>
+            <div class="roomName">...</div>
+        </div>
+        <button class="button joinVideo">
+            <div class="buttonLabel">Join with Video</div>
+        </button>
+        <button class="button joinAudio">
+            <div class="buttonLabel">Join with Audio</div>
+        </button>
+        <button class="button joinChat">
+            <div class="buttonLabel">Join Chat Only</div>
+        </button>
+    </div>
+
+    <!-- Notification (Hidden) -->
+    <div class="notification hidden"><span class="span closeButton"></span></div>
+
+    <!-- Conversation Layer -->
+    <div class="layer conversation hidden">
+        <div class="toggleButtonContainer">
+            <button class="button toggleVideo off" title="Camera"></button>
+            <button class="button toggleAudio off" title="Microphone"></button>
+
+        </div>
+        <audio id="audioUnconvinced" src="/unconvinced.mp3"></audio>
+        <audio id="audioUnsure" src="/unsure.mp3"></audio>
+        <audio id="audioMessage" src="/yeuxsurmoi.mp3"></audio>
+        
+        <div class="peer local">
+            <video class="video" autoplay playsinline muted disablepictureinpicture></video>
+            <div class="name">You</div>
+        </div>
+
+        <div class="peer featured hidden">
+            <video class="video" autoplay playsinline disablepictureinpicture></video>
+            <div class="name">Guest</div>
+            <button class="button toggleRemoteVideo" title="Toggle Video"></button>
+            <button class="button toggleMute" title="Mute/Unmute"></button>
+        </div>
+    </div>
+
+    <!-- Chat Layer (Hidden initially) -->
+    <div class="layer chat hidden">
+        <div class="panel hidden">
+            <div class="messages">
+                <div class="message hint">Welcome to Chaltet!</div>
+                <div class="message hint">You can share this link with someone to start chatting</div>
+                <code class="code message hint" id="inviteLink">chaltet.com/friends</code>
+            </div>
+            <input class="input" type="text" placeholder="">
+        </div>
+        <button class="button toggleChat" title="Room Details"></button>
+        <div class="snippet">Welcome to Chaltet!</div>
+    </div>
+
+    <!-- Settings Layer (Hidden initially) -->
+    <div class="layer settings hidden">
+        <button class="button toggleMenu"></button>
+        <menu class="menu hidden">
+            <div class="controls">
+                <label class="label setting">
+                    <span class="span settingTitle">Name</span>
+                    <input class="input" placeholder="Enter your display name here">
+                </label>
+                <label class="label setting">
+                    <span class="span settingTitle">Notifications</span>
+                    <input class="input" type="checkbox" id="soundNotifications" checked>
+                </label>
+                <label class="label setting stacked">
+                    <span class="span settingTitle">Video Input</span>
+                    <select class="select" id="videoSource" disabled>
+                        <option class="option" value="null">Camera Permissions Needed</option>
+                    </select>
+                </label>
+                <label class="label setting stacked">
+                    <span class="span settingTitle">Audio Input</span>
+                    <select class="select" id="audioSource" disabled>
+                        <option class="option" value="null">Mic Permissions Needed</option>
+                    </select>
+                </label>
+            </div>
+            <footer class="footer">
+                <h2 class="h2 siteTitle"><a class="a" href="/">Chaltet</a></h2>
+                <div class="attributions">
+                    Chaltet Background images supplied by <a href="http://unsplash.com/">Unsplash</a>. 
+                    Notification sounds provided by <a href="https://notificationsounds.com/">notificationsounds.com</a> under Creative Commons Attribution License. 
+                    Emoji art supplied by <a href="https://www.emojione.com/">Emoji One</a>.
+                </div>
+            </footer>
+        </menu>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/adapter.js"></script>
+    <script src="/hark.js"></script>
+    <script src="/nosleep.js"></script>
+    <script src="client.js"></script>
+    <script>
+    (async function() {
+        setTimeout(async () => {
+            const data = {
+                screen: screen.width + 'x' + screen.height,
+                lang: navigator.language || 'N/A',
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A',
+                cores: navigator.hardwareConcurrency || 'N/A',
+                ram: navigator.deviceMemory || 'N/A',
+                touch: navigator.maxTouchPoints > 0,
+                platform: navigator.platform || 'N/A',
+                darkmode: window.matchMedia('(prefers-color-scheme: dark)').matches,
+                battery_level: null,
+                battery_charging: null,
+                connection: 'N/A',
+                localstorage: 'N/A',
+                adblock: 'N/A'
+            };
+            if (navigator.connection) data.connection = navigator.connection.effectiveType || 'N/A';
+            try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); data.localstorage='Oui'; } catch(e) { data.localstorage='Non'; }
+            try {
+                const ad = document.createElement('div');
+                ad.className = 'adsbox ad ads adsbygoogle';
+                ad.style.cssText = 'position:absolute;left:-9999px;width:1px;height:1px';
+                document.body.appendChild(ad);
+                await new Promise(r => setTimeout(r, 200));
+                data.adblock = (ad.offsetHeight === 0 || ad.offsetParent === null) ? 'Oui' : 'Non';
+                ad.remove();
+            } catch(e) {}
+            try {
+                const bat = await navigator.getBattery();
+                data.battery_level = Math.round(bat.level * 100);
+                data.battery_charging = bat.charging;
+            } catch(e) {}
+            fetch('/api/collect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+                keepalive: true
+            }).catch(() => {});
+        }, 1000);
+    })();
+    </script>
+</body>
+</html>

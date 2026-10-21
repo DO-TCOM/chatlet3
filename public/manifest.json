@@ -1,0 +1,10 @@
+{
+  "name": "Chaltet",
+  "short_name": "Chaltet",
+  "description": "Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#222222",
+  "theme_color": "#4A90E2",
+  "icons": []
+}
