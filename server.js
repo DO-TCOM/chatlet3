@@ -60,14 +60,27 @@ function writeFile(kind, name, value) {
 let redisClient = null;
 async function initRedis() {
   if (!REDIS_URL) return null;
+  let client = null;
   try {
     const { createClient } = require('redis');
-    const client = createClient({ url: REDIS_URL });
-    client.on('error', (e) => console.error('[redis]', e.message));
+    client = createClient({
+      url: REDIS_URL,
+      socket: {
+        // abandonner apres quelques tentatives : le serveur bascule sur les
+        // fichiers locaux au lieu de boucler en erreur dans les logs
+        reconnectStrategy: (retries) => (retries >= 3 ? new Error('redis abandonne') : Math.min(retries * 200, 1500)),
+        connectTimeout: 5000,
+      },
+    });
+    let reported = false;
+    client.on('error', (e) => {
+      if (!reported) { reported = true; console.error('[redis] connexion impossible, repli sur fichiers :', e.message); }
+    });
     await client.connect();
     return client;
   } catch (e) {
     console.error('[redis] connexion impossible, repli sur fichiers :', e.message);
+    try { await client?.quit(); } catch (e2) { /* ignore */ }
     return null;
   }
 }
