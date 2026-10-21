@@ -88,12 +88,16 @@ async function initRedis() {
 const store = {
   async hGetAll(hash) {
     if (redisClient) return await redisClient.hGetAll(hash);
+    if (!memory.hashes.has(hash)) memory.hashes.set(hash, readFile('hash', hash, {}));
     return memory.hashes.get(hash) || {};
   },
   async hSet(hash, key, value) {
-    if (redisClient) return await redisClient.hSet(hash, key, JSON.stringify(value));
+    // toujours stocke une chaine : Redis renvoie des strings, le mode
+    // fichier doit se comporter pareil pour que les deux soient equivalents
+    const s = typeof value === 'string' ? value : JSON.stringify(value);
+    if (redisClient) return await redisClient.hSet(hash, key, s);
     const h = memory.hashes.get(hash) || {};
-    h[key] = value;
+    h[key] = s;
     memory.hashes.set(hash, h);
     writeFile('hash', hash, h);
   },
@@ -288,10 +292,10 @@ app.post('/api/get-profile-by-uuid', async (req, res) => {
   const uuid = cleanText(req.body && req.body.uuid, 64);
   if (!uuid) return res.json({ ok: false });
   const all = await store.hGetAll(HASH_PROFILES);
-  const found = all[uuid];
-  if (!found) return res.json({ ok: false });
-  let profile = found;
-  try { profile = typeof found === 'string' ? JSON.parse(found) : found; } catch (e) { /* ignore */ }
+  const raw = all['uuid:' + uuid];
+  if (!raw) return res.json({ ok: false });
+  let profile = raw;
+  try { profile = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return res.json({ ok: false }); }
   res.json({ ok: true, profile: { pseudo: profile.pseudo, color: profile.color } });
 });
 
@@ -336,7 +340,7 @@ const HASH_ADMIN_TOKENS = 'admin_tokens';
 
 async function issueAdminToken() {
   const token = randomId(32);
-  await store.hSet(HASH_ADMIN_TOKENS, token, JSON.stringify({ exp: Date.now() + 1000 * 60 * 60 * 12 }));
+  await store.hSet(HASH_ADMIN_TOKENS, token, { exp: Date.now() + 1000 * 60 * 60 * 12 });
   return token;
 }
 async function isValidAdminToken(token) {
@@ -346,7 +350,7 @@ async function isValidAdminToken(token) {
   if (!raw) return false;
   let rec = raw;
   try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return false; }
-  if (rec.exp > Date.now()) return true;
+  if (rec && rec.exp > Date.now()) return true;
   await store.hDel(HASH_ADMIN_TOKENS, token);
   return false;
 }
@@ -364,22 +368,23 @@ app.post('/admin/api/login', async (req, res) => {
 app.post('/admin/api/data', async (req, res) => {
   const token = cleanText(req.body && req.body.token, 128);
   if (!(await isValidAdminToken(token))) return res.status(401).json({ ok: false });
+  const parse = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch (e) { return v; } };
   const logs = await store.lRange(KEY_LOGS);
-  const extras = await store.hGetAll(HASH_EXTRAS);
-  const notes = await store.hGetAll(HASH_NOTES);
-  const blacklist = await store.hGetAll(HASH_BLACKLIST);
-  const config = (await store.hGetAll(KEY_CONFIG)) || {};
+  const rawExtras = await store.hGetAll(HASH_EXTRAS);
+  const rawNotes = await store.hGetAll(HASH_NOTES);
+  const rawBl = await store.hGetAll(HASH_BLACKLIST);
+  const rawConfig = await store.hGetAll(KEY_CONFIG);
+  const extras = {};
+  for (const [k, v] of Object.entries(rawExtras)) extras[k] = parse(v);
   res.json({
     ok: true,
     logs: logs.join('\n'),
     extras,
-    notes,
-    blacklist: Object.values(blacklist).map((v) => {
-      try { return typeof v === 'string' ? JSON.parse(v) : v; } catch (e) { return v; }
-    }),
+    notes: rawNotes,
+    blacklist: Object.values(rawBl).map(parse),
     config: {
-      whitelist_mode: config.whitelist_mode === true || config.whitelist_mode === 'true',
-      redirect_url: config.redirect_url || '',
+      whitelist_mode: rawConfig.whitelist_mode === 'true' || rawConfig.whitelist_mode === true,
+      redirect_url: rawConfig.redirect_url || '',
     },
   });
 });
@@ -406,7 +411,7 @@ app.post('/admin/api/toggle', async (req, res) => {
   const current = (await store.hGetAll(HASH_BLACKLIST))[key] || {};
   const rec = { blocked: current.blocked === true, whitelist: current.whitelist === true };
   if (field === 'blocked' || field === 'whitelist') rec[field] = value === true || value === 'true';
-  await store.hSet(HASH_BLACKLIST, key, JSON.stringify(rec));
+  await store.hSet(HASH_BLACKLIST, key, rec);
   res.json({ ok: true });
 });
 
@@ -539,8 +544,8 @@ io.on('connection', (socket) => {
     socket.data.profile = { displayName, profileColor };
 
     const uuid = cleanText(data && data.uuid, 64) || socket.id;
-    await store.hSet(HASH_PROFILES, `${room}:${socket.id}`, JSON.stringify({ displayName, profileColor, uuid }));
-    await store.hSet(HASH_PROFILES, `uuid:${uuid}`, JSON.stringify({ pseudo: displayName, color: profileColor }));
+    await store.hSet(HASH_PROFILES, `${room}:${socket.id}`, { displayName, profileColor, uuid });
+    await store.hSet(HASH_PROFILES, `uuid:${uuid}`, { pseudo: displayName, color: profileColor });
 
     socket.to(room).emit('profile-update', { id: socket.id, displayName, profileColor });
   });
