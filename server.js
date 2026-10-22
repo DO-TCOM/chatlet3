@@ -526,8 +526,10 @@ io.on('connection', (socket) => {
 
     const profiles = await store.hGetAll(HASH_PROFILES);
     const mine = {};
-    for (const [id, raw] of Object.entries(profiles)) {
-      if (!id.startsWith(room + ':')) continue;
+    for (const [key, raw] of Object.entries(profiles)) {
+      if (!key.startsWith(room + ':')) continue;
+      const id = key.slice(room.length + 1);
+      if (id === socket.id) continue;
       let p = raw;
       try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { /* ignore */ }
       mine[id] = { displayName: p.displayName || 'Guest', profileColor: p.profileColor || '#4A90E2' };
