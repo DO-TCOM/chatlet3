@@ -252,29 +252,43 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: Math.floor(process.uptime()) });
 });
 
-app.get('/api/ice-servers', (req, res) => {
-  const servers = [];
-  servers.push({ url: 'stun:global.stun.twilio.com:3478', urls: 'stun:global.stun.twilio.com:3478' });
+let twilioCache = { at: 0, servers: null };
+async function fetchTwilioIce() {
+  if (twilioCache.servers && Date.now() - twilioCache.at < 50 * 60 * 1000) return twilioCache.servers;
+  const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
+  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(TWILIO_ACCOUNT_SID)}/Tokens.json`, {
+    method: 'POST',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'Ttl=3600',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!r.ok) throw new Error('twilio ' + r.status);
+  const j = await r.json();
+  const list = (j.ice_servers || []).map((x) => ({
+    url: x.url || x.urls,
+    urls: x.urls || x.url,
+    ...(x.username ? { username: x.username, credential: x.credential } : {}),
+  }));
+  if (!list.length) throw new Error('twilio: aucun serveur');
+  twilioCache = { at: Date.now(), servers: list };
+  return list;
+}
 
+app.get('/api/ice-servers', async (req, res) => {
+  let servers = [];
   if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
-    const username = TWILIO_ACCOUNT_SID;
-    const credential = crypto
-      .createHmac('sha1', TWILIO_AUTH_TOKEN)
-      .update(username)
-      .digest('base64');
-    for (const transport of ['udp', 'tcp']) {
-      const url = `turn:global.turn.twilio.com:3478?transport=${transport}`;
-      servers.push({ url, urls: url, username, credential });
-    }
-    const url443 = 'turn:global.turn.twilio.com:443?transport=tcp';
-    servers.push({ url: url443, urls: url443, username, credential });
-  } else if (TURN_URL && TURN_SECRET) {
-    const username = String(Math.floor(Date.now() / 1000) + 86400);
-    const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
-    for (const transport of ['udp', 'tcp']) {
-      const sep = TURN_URL.includes('?') ? '&' : '?';
-      const url = `${TURN_URL}${sep}transport=${transport}`;
-      servers.push({ url, urls: url, username, credential });
+    try { servers = await fetchTwilioIce(); } catch (e) { console.error('[ice] twilio :', e.message); }
+  }
+  if (!servers.length) {
+    servers.push({ url: 'stun:global.stun.twilio.com:3478', urls: 'stun:global.stun.twilio.com:3478' });
+    if (TURN_URL && TURN_SECRET) {
+      const username = String(Math.floor(Date.now() / 1000) + 86400);
+      const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
+      for (const transport of ['udp', 'tcp']) {
+        const sep = TURN_URL.includes('?') ? '&' : '?';
+        const url = `${TURN_URL}${sep}transport=${transport}`;
+        servers.push({ url, urls: url, username, credential });
+      }
     }
   }
   res.json(servers);
