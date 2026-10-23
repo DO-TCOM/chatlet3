@@ -19,17 +19,13 @@ socket.on('connect', () => {
     if (banner) banner.remove();
 });
 
-// Note: socket intentionally not exposed on window
 const roomId = window.location.pathname.split('/').pop() || 'friends';
 
-// Re-auth as mod on reconnect
 socket.on('reconnect', () => {
-    // Fermer toutes les connexions WebRTC existantes
     for (const id in peers) {
         try { peers[id].close(); } catch(e) {}
         delete peers[id];
     }
-    // Supprimer tous les éléments DOM des peers distants
     document.querySelectorAll('.peer.miniature').forEach(el => el.remove());
     Object.keys(remoteProfiles).forEach(k => delete remoteProfiles[k]);
     featuredUserId = null;
@@ -49,67 +45,48 @@ socket.on('reconnect', () => {
 let localStream = null;
 const peers = {};
 
-// Identity Generation
-// ── Générateur de pseudos épiques ────────────────────────────────────────────
 const epicNames = [
-    // Star Wars
     "LukeSkywalker","DarthVader","ObiWanKenobi","HanSolo","PrincessLeia","Yoda","BobaFett",
     "ReyPalpatine","KyloRen","MaceWindu","AhsokaTano","Grogu","DarthMaul","CountDooku",
     "PadmeAmidala","GeneralGrievous","GrandMoffTarkin","GrandAdmiralThrawn","JangoFett","DarthSidious",
-    // DBZ
     "Goku","Vegeta","Gohan","Piccolo","Frieza","CellPerfect","MajinBuu","FutureTrunks","BrolyLSSJ",
     "Krillin","Yamcha","TienShinhan","Videl","Android18","Bardock","Raditz","Nappa","Pan","Uub",
     "GogetaSSB","VegitoBlue","UltraInstinct","Beerus","Whis","Jiren","HitHitter","CabbaSaiyan",
-    // Naruto
     "NarutoUzumaki","SasukeUchiha","SakuraHaruno","KakashiHatake","ItachiUchiha","MadaraUchiha",
     "ObitoUchiha","MinatoNamekaze","TsunadeSenju","JiraiyaSennin","OrochimaruSama","GaaraSuna",
     "ShikamaruNara","HinataHyuga","NejiHyuga","RockLee","TenTen","KibaInuzuka","SaiYamato","Killer_Bee",
-    // One Piece
     "MonkeyDLuffy","RoronoaZoro","NamiNavigator","UsoppSniper","VinsmokeSanji","NicoRobin",
     "TonyTonyChopper","FrankySuper","BrookYoHoHo","ShanksRedHair","SilverRayleigh","BoaHancock",
     "HawkeyeMihawk","CrocodileSama","DonquixoteDoflamingo","KaidoYonko","BigMomLinlin",
     "MarshallDTeach","PortgasDAce","SaboRevolutionary","WhitebeardNewgate","GolDRoger",
-    // Seigneur des Anneaux
     "FrodoBaggins","GandalfTheGrey","AragornElessar","LegolasGreenleaf","GimliBaelin",
     "SamwiseGamgee","MeriadocBrandybuck","PeregrinTook","BoromirGondor","FaramirIthilien",
     "EowynShieldmaiden","TheodénKing","GaladrielLothlórien","ElrondRivendell","SarumanWhite",
     "SauronDarkLord","GollumSmeagol","ThorinOakenshield","BilboBaggins","TaurielElf",
-    // Marvel
     "TonyStarkIronMan","SteveRogersCapAm","ThorOdinson","BruceBannerHulk","NatashaRomanoff",
     "ClintonBarton","NickFury","WandaMaximoff","VisionSynthezoid","SamWilsonFalcon",
     "SpiderManPeter","DoctorStrange","BlackPantherTChalla","CaptainMarvel","AntManScott",
     "ThanosInfinity","LokiAsgard","UltraVision","NebulaGamora","RocketRaccoon","GrootIAmGroot",
-    // Harry Potter
     "HarryPotter","HermioneGranger","RonWeasley","AlbusDumbledore","SeverusSnape","LordVoldemort",
     "SiriusBlack","RemusLupin","BellatrixLestrange","NymphadoraTonks","MadEyeMoody","Dobby",
     "DracoMalfoy","GinnyWeasley","LunaLovegood","NevilleNeville","FredWeasley","GeorgeWeasley",
-    // Gaming
     "MasterChief","KratosSpartiate","GeraltDeRivie","LinkHylien","SamusAran","SolidSnake",
     "ClouDStrife","LightningFarron","NoctisLucisC","DoomSlayer","ArthurMorgan","AloyHorizon",
     "EzioAuditore","AltairIbnLaAhad","ConnorKenway","Bayek","EllieTLOU","JoelMiller",
-    // DC
     "BruceWayneBat","ClarkKentSuper","DianaWonder","BarryAllenFlash","HalJordanGL",
     "ArthurCurryAqua","VictorStoneC","LexLuthorCorp","TheJokerHaha","HarleyQuinnBAM",
-    // Jeux vidéo / Fantasy
     "TheElderDragon","DragonbornDova","ArthasLichKing","IllidanStormrage","SylvanasBansh",
     "ThrallWorldSham","JainaProudmoor","VarianWrynn","AndromédaNova","ZenyattaMonk",
-    // Français sympa
     "GargantUa","Astérix","Obélix","Vercingétorix","Charlemagne","NapoléonBonaparte",
     "AramisDArtagnan","PorthosAthos","EdmondDantès","JeanValjean","QuasimodoND",
     "PhantomOpera","ArseneLupin","HerculePoi","NémoCapitaine","MichelStrogoff"
 ];
 
-// Couleurs vives et variées
 const pastelColors = [
-    // Pastels doux
     "#ef9a9a","#f48fb1","#ce93d8","#b39ddb","#9fa8da","#90caf9","#81d4fa","#80deea","#80cbc4","#a5d6a7",
-    // Néons
     "#ff4081","#e040fb","#7c4dff","#448aff","#00e5ff","#1de9b6","#76ff03","#ffea00","#ff6d00","#ff1744",
-    // Tons chauds
     "#ff7043","#ffa726","#ffca28","#d4e157","#66bb6a","#26c6da","#42a5f5","#5c6bc0","#ab47bc","#ec407a",
-    // Tons froids
     "#00bcd4","#009688","#4caf50","#8bc34a","#cddc39","#03a9f4","#2196f3","#3f51b5","#9c27b0","#e91e63",
-    // Spéciaux
     "#00e676","#40c4ff","#ff6e40","#ffd740","#69f0ae","#ea80fc","#ff80ab","#b388ff","#82b1ff","#84ffff"
 ];
 
@@ -120,17 +97,14 @@ function generateRandomName() {
 let savedColor = localStorage.getItem('profileColor');
 if (!pastelColors.includes(savedColor)) savedColor = null;
 
-// Check URL params for pseudo and color (from shared links)
 const _urlParams = new URLSearchParams(window.location.search);
 const _urlPseudo = _urlParams.get('pseudo');
 const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null;
 
-// Lecture profil depuis le hash (#base64 → pseudo:color automatique)
 (function applyHashProfile() {
     const hash = window.location.hash.replace('#', '').trim();
     if (!hash || hash.length < 4) return;
     try {
-        // Décoder le base64url → "pseudo:color"
         const b64 = hash.replace(/-/g, '+').replace(/_/g, '/');
         const decoded = decodeURIComponent(escape(atob(b64)));
         const colonIdx = decoded.lastIndexOf(':');
@@ -140,31 +114,24 @@ const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null
         if (!pseudo || !color) return;
         const fullColor = color.startsWith('#') ? color : '#' + color;
         if (!/^#[0-9a-fA-F]{6}$/i.test(fullColor)) return;
-        // Appliquer uniquement si pas déjà un profil personnalisé
         localStorage.setItem('displayName', pseudo);
         localStorage.setItem('profileColor', fullColor);
-        // Nettoyer le hash sans recharger
         history.replaceState(null, '', window.location.pathname + window.location.search);
     } catch (e) {}
 })();
 
-// Check for transferred profile from localStorage (cross-domain)
 let transferredProfile = null;
 let groupProfiles = null;
 try {
     const stored = localStorage.getItem('transferProfile');
     if (stored) {
         const profile = JSON.parse(stored);
-        // Check if profile is less than 5 minutes old
         if (Date.now() - profile.timestamp < 5 * 60 * 1000) {
-            // Group profiles (multiple users)
             if (profile.profiles) {
                 groupProfiles = profile.profiles;
             } else {
-                // Single profile
                 transferredProfile = profile;
             }
-            // Clear after use
             localStorage.removeItem('transferProfile');
         }
     }
@@ -172,7 +139,6 @@ try {
     console.error('Error reading transferred profile:', e);
 }
 
-// Get or create UUID for this user
 function getUUID() {
     let uuid = localStorage.getItem('userUUID');
     if (!uuid) {
@@ -182,7 +148,6 @@ function getUUID() {
     return uuid;
 }
 
-// Fetch profile from server based on UUID
 async function fetchProfileByUUID() {
     const uuid = getUUID();
     try {
@@ -201,7 +166,6 @@ async function fetchProfileByUUID() {
     return null;
 }
 
-// Fetch profile by token (from URL hash #token)
 async function fetchProfileByToken() {
     const hash = window.location.hash.replace('#', '').trim();
     if (!hash || hash.length < 5 || hash.includes(':')) return null;
@@ -215,7 +179,6 @@ async function fetchProfileByToken() {
     return null;
 }
 
-// Priority: URL params > transferred profile > localStorage > random
 const _matchedGroupProfile = (groupProfiles && groupProfiles.length > 0) ? findMatchingProfile(groupProfiles) : null;
 let myDisplayName  = _urlPseudo
     || (_matchedGroupProfile ? _matchedGroupProfile.pseudo : null)
@@ -231,18 +194,15 @@ let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlCol
 localStorage.setItem('displayName', myDisplayName);
 localStorage.setItem('profileColor', myProfileColor);
 
-// Apply UUID or Token profile in background (overrides if found)
 (async () => {
     let applied = false;
-    // 1. Try Token first (priority)
     const tokenProfile = await fetchProfileByToken();
     if (tokenProfile) {
         myDisplayName  = tokenProfile.pseudo;
         myProfileColor = tokenProfile.color.startsWith('#') ? tokenProfile.color : '#' + tokenProfile.color;
         applied = true;
     } else {
-        // 2. Try UUID fallback
-        const uuidProfile = await fetchProfileByUUID(); // Fix 6: declared in same scope
+        const uuidProfile = await fetchProfileByUUID();
         if (uuidProfile) {
             myDisplayName  = uuidProfile.pseudo || myDisplayName;
             myProfileColor = uuidProfile.color  || myProfileColor;
@@ -262,23 +222,17 @@ localStorage.setItem('profileColor', myProfileColor);
     }
 })();
 
-// Function to find matching profile for current user
 function findMatchingProfile(profiles) {
     if (!profiles || profiles.length === 0) return null;
-    
-    // Try to match by UUID
     const uuid = getUUID();
     if (uuid) {
         const uuidMatch = profiles.find(p => p.uuid === uuid);
         if (uuidMatch) return uuidMatch;
     }
-    
-    // Default: return first profile
     return profiles[0];
 }
 let allowSoundNotifications = localStorage.getItem('allowSoundNotifications') !== 'false';
 
-// UI Elements
 const welcomeLayer = document.querySelector('.welcome');
 const conversationLayer = document.querySelector('.conversation');
 const backgroundLayer = document.querySelector('.layer.background');
@@ -290,7 +244,6 @@ const roomNameDisplay = document.querySelector('.roomName');
 const nameInput = document.querySelector('.settings .input');
 const chatInputField = document.querySelector('.chat .input');
 
-// Buttons
 const joinVideoBtn = document.querySelector('.joinVideo');
 const joinAudioBtn = document.querySelector('.joinAudio');
 const joinChatBtn = document.querySelector('.joinChat');
@@ -302,18 +255,15 @@ let isModerator = false;
 
 const toggleVideoBtn = document.querySelector('.toggleVideo');
 const toggleAudioBtn = document.querySelector('.toggleAudio');
-// toggleScreenShareBtn : fonctionnalité désactivée (button retiré de l'UI)
-
 const videoSelect = document.getElementById('videoSource');
 const audioSelect = document.getElementById('audioSource');
 
-// Sounds
 const audioUnconvinced = document.getElementById('audioUnconvinced');
 const audioUnsure = document.getElementById('audioUnsure');
 const audioMessage = document.getElementById('audioMessage');
 
 const remoteProfiles = {};
-const mutedPeers = new Set(); // IDs des peers mutés par le mod
+const mutedPeers = new Set();
 let screenStream;
 let featuredUserId = null;
 let iceServersConfig = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -330,7 +280,7 @@ function escapeHTML(str) {
 }
 
 function linkify(str) {
-    const urlRegex = /(https?:\/\/[^\s<>"]+)/g;
+    const urlRegex = /(https?:\/\/[^\s<>\"]+)/g;
     const parts = str.split(urlRegex);
     return parts.map((part, i) => {
         if (i % 2 === 1) {
@@ -347,14 +297,11 @@ function updateLocalProfileUI() {
     const localName = document.querySelector('.peer.local .name');
     if (localPeer) localPeer.style.backgroundColor = safeColor;
     if (localName) { localName.innerText = myDisplayName; localName.style.color = safeColor; }
-    
-    // Update featured if local is featured
     if (featuredUserId === 'local') {
         setFeatured('local');
     }
 }
 
-// Initialization
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         const controller = new AbortController();
@@ -403,73 +350,59 @@ document.addEventListener('DOMContentLoaded', async () => {
         backgroundLayer.style.backgroundPosition = 'center center';
         backgroundLayer.style.backgroundColor = '#000000';
     } else {
-        // Rooms sans image personnalisée → image nature/animaux aléatoire
         const NATURE_BACKGROUNDS = [
-            // Forêts
             'https://images.unsplash.com/photo-1448375240586-882707db888b?w=1600&q=80',
             'https://images.unsplash.com/photo-1425913397330-cf8af2ff40a1?w=1600&q=80',
             'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1600&q=80',
             'https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?w=1600&q=80',
             'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1600&q=80',
-            // Océans & plages
             'https://images.unsplash.com/photo-1505118380757-91f5f5632de0?w=1600&q=80',
             'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1600&q=80',
             'https://images.unsplash.com/photo-1504214208698-ea1916a2195a?w=1600&q=80',
             'https://images.unsplash.com/photo-1519046904884-53103b34b206?w=1600&q=80',
             'https://images.unsplash.com/photo-1471922694854-ff1b63b20054?w=1600&q=80',
-            // Montagnes
             'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1600&q=80',
             'https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?w=1600&q=80',
             'https://images.unsplash.com/photo-1434394354979-a235cd36269d?w=1600&q=80',
             'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1600&q=80',
             'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&q=80',
-            // Couchers de soleil
             'https://images.unsplash.com/photo-1495616811223-4d98c6e9c869?w=1600&q=80',
             'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?w=1600&q=80',
             'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=1600&q=80',
             'https://images.unsplash.com/photo-1490682143684-14369e18dce8?w=1600&q=80',
             'https://images.unsplash.com/photo-1513002749550-c59d786b8e6c?w=1600&q=80',
-            // Animaux — mammifères
             'https://images.unsplash.com/photo-1474511320723-9a56873867b5?w=1600&q=80',
             'https://images.unsplash.com/photo-1564349683136-77e08dba1ef7?w=1600&q=80',
             'https://images.unsplash.com/photo-1437622368342-7a3d73a34c8f?w=1600&q=80',
             'https://images.unsplash.com/photo-1551969014-7d2c4cddf0b6?w=1600&q=80',
             'https://images.unsplash.com/photo-1546182990-dffeafbe841d?w=1600&q=80',
-            // Animaux — oiseaux
             'https://images.unsplash.com/photo-1444464666168-49d633b86797?w=1600&q=80',
             'https://images.unsplash.com/photo-1552728089-57bdde30beb3?w=1600&q=80',
             'https://images.unsplash.com/photo-1522926193341-e9ffd686c60f?w=1600&q=80',
             'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=1600&q=80',
             'https://images.unsplash.com/photo-1440648130659-8474a2aa671f?w=1600&q=80',
-            // Animaux — marins
             'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=1600&q=80',
             'https://images.unsplash.com/photo-1518020382113-a7e8fc38eac9?w=1600&q=80',
             'https://images.unsplash.com/photo-1559827291-72ee739d0d9a?w=1600&q=80',
             'https://images.unsplash.com/photo-1437622368342-7a3d73a34c8f?w=1600&q=80',
             'https://images.unsplash.com/photo-1596944924616-7b38e7cfac36?w=1600&q=80',
-            // Cascades & lacs
             'https://images.unsplash.com/photo-1432405972618-c60b0225b8f9?w=1600&q=80',
             'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=1600&q=80',
             'https://images.unsplash.com/photo-1433086966358-54859d0ed716?w=1600&q=80',
             'https://images.unsplash.com/photo-1501854140801-50d01698950b?w=1600&q=80',
             'https://images.unsplash.com/photo-1455218873509-8097305ee378?w=1600&q=80',
-            // Déserts & paysages arides
             'https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=1600&q=80',
             'https://images.unsplash.com/photo-1504192010706-dd7f569ee2be?w=1600&q=80',
             'https://images.unsplash.com/photo-1518623489648-a173ef7824f3?w=1600&q=80',
-            // Champs & prairies
             'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1600&q=80',
             'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?w=1600&q=80',
             'https://images.unsplash.com/photo-1490750967868-88df5691cc84?w=1600&q=80',
             'https://images.unsplash.com/photo-1464347744102-11db6282a4a5?w=1600&q=80',
-            // Aurores boréales & ciel étoilé
             'https://images.unsplash.com/photo-1531366936337-7c912a4589a7?w=1600&q=80',
             'https://images.unsplash.com/photo-1464852045489-bccb7d17fe39?w=1600&q=80',
             'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?w=1600&q=80',
             'https://images.unsplash.com/photo-1444080748397-f442aa95c3e5?w=1600&q=80',
         ];
-
-        // Seed basée sur le nom de la room pour que la même room ait toujours la même image
         let seed = 0;
         for (let i = 0; i < roomId.length; i++) seed += roomId.charCodeAt(i);
         const bgUrl = NATURE_BACKGROUNDS[seed % NATURE_BACKGROUNDS.length];
@@ -502,21 +435,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-
     socket.on('mod-status', (status) => {
         isModerator = status;
         if (status) {
-            // Add buttons on all existing miniatures
             document.querySelectorAll('.peer.miniature').forEach(peer => addModButtons(peer));
-            // Show badge on local avatar
             addModBadge(document.querySelector('.peer.local'));
-            // Tell others I am mod
             socket.emit('mod-badge', { roomId });
         }
     });
 
     socket.on('mod-badge', (data) => {
-        // Show badge on remote peer - retry if DOM not ready yet
         const applyBadge = () => {
             const el = document.getElementById(`peer-${data.id}`);
             if (el) {
@@ -531,7 +459,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         applyBadge();
     });
 
-    // Confirmation serveur quand un peer est muté/démuté → sync boutons mod
     socket.on('mod-mute-ack', (data) => {
         const { targetId, muted } = data;
         if (muted) {
@@ -540,7 +467,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             mutedPeers.delete(targetId);
         }
         syncMuteButtons(targetId);
-        // Sync aussi le featured si c'est lui
         if (featuredUserId === targetId) {
             const featuredEl = document.querySelector('.peer.featured');
             if (featuredEl) {
@@ -592,7 +518,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (type === 'kicked-temp') {
             socket.disconnect();
             showModOverlay('KICK 30s by ' + by, () => {
-                // Attendre 30s avant de permettre le retour
                 setTimeout(() => window.location.reload(), 30000);
             });
         } else if (type === 'banned') {
@@ -608,7 +533,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
     });
 
-    // Limite 200 caractères côté client (feedback immédiat)
     chatInputField.maxLength = 200;
 
     document.addEventListener('keydown', (e) => {
@@ -657,8 +581,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
     }
-
 });
+
+function syncLocalTracksToPeers() {
+    if (!localStream) return;
+    const streamTracks = localStream.getTracks();
+    for (const id in peers) {
+        const pc = peers[id];
+        if (!pc || !pc.getSenders) continue;
+        const senders = pc.getSenders();
+        streamTracks.forEach(track => {
+            const exists = senders.some(sender => sender.track && sender.track.id === track.id);
+            if (!exists) pc.addTrack(track, localStream);
+        });
+    }
+}
 
 async function handleToggleVideo() {
     if (!localStream) localStream = new MediaStream();
@@ -668,10 +605,7 @@ async function handleToggleVideo() {
             const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } });
             const track = newStream.getVideoTracks()[0];
             localStream.addTrack(track);
-            for (const id in peers) {
-                peers[id].addTrack(track, localStream);
-                // onnegotiationneeded will fire automatically and handle renegotiation
-            }
+            syncLocalTracksToPeers();
         } catch (err) { console.error('Media error:', err); return; }
     }
 
@@ -692,10 +626,7 @@ async function handleToggleAudio() {
             const track = newStream.getAudioTracks()[0];
             localStream.addTrack(track);
             setupAudioAnalysis(localStream);
-            for (const id in peers) {
-                peers[id].addTrack(track, localStream);
-                // onnegotiationneeded will fire automatically and handle renegotiation
-            }
+            syncLocalTracksToPeers();
         } catch (err) { console.error('Media error:', err); return; }
     }
 
@@ -739,29 +670,23 @@ async function start(useVideo, useAudio) {
                 toggleAudioBtn.classList.remove('off');
                 setupAudioAnalysis(localStream);
             }
+            syncLocalTracksToPeers();
             getDevices();
         } catch (err) { console.error('Media error:', err); }
     }
 
-    // FIX: Emit profile-update BEFORE join-room to ensure server has profile data for sync-profiles
     socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
     socket.emit('join-room', roomId);
 
-    // Send URL pseudo/color to server for tracking
     if (_urlPseudo || _urlColor) {
         socket.emit('url-identity', { pseudo: _urlPseudo, color: _urlColor });
     }
 
-    // Auto-mod if secret stored in localStorage
     const modSecret = localStorage.getItem('modSecret');
     if (modSecret) {
         setTimeout(() => socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }), 500);
-        // Retry after sync-profiles to ensure buttons appear on existing peers
         setTimeout(() => { if (!isModerator) socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }); }, 1500);
     }
-    
-    // Set local as featured by default if no one else is there
-    // When alone, stay small at bottom - don't auto-feature local
 }
 
 function updateLocalVideoElement(stream) {
@@ -791,7 +716,6 @@ function updateVideoVisibility(userId, isEnabled) {
     }
 }
 
-// Signaling
 socket.on('user-connected', (userId) => {
     if (userId === socket.id) return;
 
@@ -805,9 +729,8 @@ socket.on('user-connected', (userId) => {
     if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
     createPeerConnection(userId, true);
     updatePeerUI(userId, true);
+    syncLocalTracksToPeers();
 
-    // Fix D: re-announce our own profile to the room so the new joiner
-    // gets our name even if sync-profiles sent "Guest" for us (cross-node race)
     if (myDisplayName && myProfileColor) {
         socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
     }
@@ -825,8 +748,6 @@ socket.on('signal', (data) => {
     const isNew = !peers[data.from];
     if (isNew) createPeerConnection(data.from, false);
     const pc = peers[data.from];
-    // updatePeerUI avec forceCreate=true si pas encore dans le DOM
-    // (cas où sync-profiles n'a pas encore tourné)
     if (isNew) updatePeerUI(data.from, !document.getElementById('peer-' + data.from));
 
     if (data.signal.type === 'offer') {
@@ -857,15 +778,13 @@ function flushCandidateQueue(pc) {
 
 function showModOverlay(message, callback, autoDismiss = false) {
     if (autoDismiss) {
-        // Pour mute/unmute : toast discret en bas, pas d'overlay plein écran
         const toast = document.createElement('div');
-        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#ff4444;font-size:1rem;font-weight:bold;padding:10px 24px;border-radius:8px;z-index:9999;font-family:sans-serif;';
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#ff4444;font-size:1rem;font-weight:bold;padding:10px 24px;border-radius:999px;z-index:9999;';
         toast.textContent = message;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 2000);
         return;
     }
-    // Pour kick/ban : overlay plein écran
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;font-family:sans-serif;';
     const msgEl = document.createElement('div');
@@ -950,8 +869,6 @@ function updatePeerUI(userId, forceCreate = false) {
     const safeColor = sanitizeColor(prof.profileColor);
 
     if (!peerEl) {
-        // Ne créer l'élément que si forceCreate=true (user-connected/signal)
-        // Sinon (sync-profiles, profile-update) on update juste remoteProfiles
         if (!forceCreate) return;
         peerEl = document.createElement('div');
         peerEl.id = `peer-${userId}`;
@@ -998,7 +915,6 @@ function updatePeerUI(userId, forceCreate = false) {
 }
 
 function setFeatured(idOrTag, streamOverride = null) {
-
     document.querySelectorAll('.peer.miniature').forEach(el => el.classList.remove('is-featured'));
     document.querySelector('.peer.local').classList.remove('is-featured');
 
@@ -1020,7 +936,6 @@ function setFeatured(idOrTag, streamOverride = null) {
     featuredEl.classList.remove('hidden');
     const featuredVideo = featuredEl.querySelector('video');
     const featuredName = featuredEl.querySelector('.name');
-    // Add mod controls on featured element for the displayed peer
     featuredEl.querySelector('.mod-controls')?.remove();
     if (isModerator && idOrTag && idOrTag !== 'local' && idOrTag !== 'local-screen') {
         const id = idOrTag;
@@ -1031,7 +946,7 @@ function setFeatured(idOrTag, streamOverride = null) {
         const makeBtn = (label, bg, action) => {
             const btn = document.createElement('button');
             btn.innerText = label;
-            btn.style.cssText = `font-size:12px;padding:4px 10px;width:auto;height:auto;background:${bg};color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
+            btn.style.cssText = `font-size:12px;padding:4px 10px;width:auto;height:auto;background:${bg};color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.25);`;
             btn.onclick = (e) => { e.stopPropagation(); socket.emit(action, id); };
             return btn;
         };
@@ -1069,7 +984,6 @@ socket.on('user-disconnected', (userId) => {
     if (featuredUserId === userId) {
         const remaining = Object.keys(peers);
         if (remaining.length === 0) {
-            // Alone again - hide featured, local goes back small
             featuredUserId = null;
             const featuredEl = document.querySelector('.peer.featured');
             if (featuredEl) featuredEl.classList.add('hidden');
@@ -1082,31 +996,24 @@ socket.on('user-disconnected', (userId) => {
     }
 });
 
-// Note : Le nettoyage périodique des avatars basé sur l'état WebRTC a été désactivé.
-// Auparavant, il supprimait incorrectement de l'écran après 15 secondes :
-// 1. Les utilisateurs connectés en "Chat Only" (qui n'ont aucun flux WebRTC/PeerConnection).
-// 2. Les utilisateurs dont la connexion WebRTC mettait plus de 15 secondes à s'établir.
-// La présence des avatars (création et suppression) est déjà gérée de manière fiable
-// par le serveur Socket.io via 'sync-profiles', 'user-connected' et 'user-disconnected'.
-
 function createPeerConnection(userId, isInitiator) {
     const pc = new RTCPeerConnection({ iceServers: iceServersConfig });
     peers[userId] = pc;
     pc.remoteStream = new MediaStream();
     pc._isInitiator = isInitiator;
 
-    if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
 
     pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { to: userId, signal: { candidate: e.candidate } }); };
 
     pc.ontrack = (e) => {
         e.streams[0].getTracks().forEach(track => {
-            // Éviter les doublons de tracks
             if (!pc.remoteStream.getTracks().find(t => t.id === track.id)) {
                 pc.remoteStream.addTrack(track);
             }
         });
-        // Attacher le stream à l'élément vidéo — créer l'élément si nécessaire
         let peerEl = document.getElementById(`peer-${userId}`);
         if (!peerEl) {
             updatePeerUI(userId, true);
@@ -1123,13 +1030,11 @@ function createPeerConnection(userId, isInitiator) {
 
     pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed') {
-            // Tentative de redémarrage ICE
             if (pc._isInitiator && pc.restartIce) {
                 pc.restartIce();
             }
         }
         if (pc.connectionState === 'connected') {
-            // S'assurer que le stream est bien attaché
             const peerEl = document.getElementById(`peer-${userId}`);
             if (peerEl && pc.remoteStream.getTracks().length > 0) {
                 const videoEl = peerEl.querySelector('video');
@@ -1141,13 +1046,10 @@ function createPeerConnection(userId, isInitiator) {
     };
 
     pc.onnegotiationneeded = async () => {
-        // Only the initiator sends the initial offer to avoid glare.
-        // Once a remote description exists, either side can renegotiate
-        // (e.g. when a new track is added later via handleToggleVideo/Audio).
         if (!pc._isInitiator && !pc.remoteDescription) return;
         try {
             const offer = await pc.createOffer();
-            if (pc.signalingState !== 'stable') return; // state changed while awaiting
+            if (pc.signalingState !== 'stable') return;
             await pc.setLocalDescription(offer);
             socket.emit('signal', { to: userId, signal: pc.localDescription });
         } catch (e) { console.error('Negotiation error:', e); }
@@ -1156,7 +1058,6 @@ function createPeerConnection(userId, isInitiator) {
     return pc;
 }
 
-// NoSleep - prevent screen sleep on mobile
 const noSleep = new NoSleep();
 
 let _harkInstance = null;
@@ -1203,7 +1104,6 @@ async function getDevices() {
     if (videoSelect.options.length > 0) videoSelect.disabled = false;
     if (audioSelect.options.length > 0) audioSelect.disabled = false;
 
-    // Attach change listeners only once
     if (!videoSelect._listenerAttached) {
         videoSelect._listenerAttached = true;
         videoSelect.addEventListener('change', async () => {
@@ -1214,12 +1114,10 @@ async function getDevices() {
                     video: { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
                 });
                 const newTrack = newStream.getVideoTracks()[0];
-                // Replace in all peer connections
                 for (const id in peers) {
                     const sender = peers[id].getSenders().find(s => s.track && s.track.kind === 'video');
                     if (sender) await sender.replaceTrack(newTrack);
                 }
-                // Replace in local stream
                 localStream.getVideoTracks().forEach(t => { t.stop(); localStream.removeTrack(t); });
                 localStream.addTrack(newTrack);
                 updateLocalVideoElement(localStream);
@@ -1235,12 +1133,10 @@ async function getDevices() {
             try {
                 const newStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
                 const newTrack = newStream.getAudioTracks()[0];
-                // Replace in all peer connections
                 for (const id in peers) {
                     const sender = peers[id].getSenders().find(s => s.track && s.track.kind === 'audio');
                     if (sender) await sender.replaceTrack(newTrack);
                 }
-                // Replace in local stream and restart hark
                 localStream.getAudioTracks().forEach(t => { t.stop(); localStream.removeTrack(t); });
                 localStream.addTrack(newTrack);
                 setupAudioAnalysis(localStream);
@@ -1253,10 +1149,8 @@ socket.on('peer-speaking', (data) => {
     updateSpeakingUI(data.id, data.status);
 });
 
-// Anti-spam : avertissement ou mute automatique reçu du serveur
 socket.on('spam-warning', (data) => {
     const chatInput = document.querySelector('.chat .input');
-    // Afficher le message dans le chat local uniquement
     const div = document.createElement('div');
     div.className = 'message hint';
     div.style.color = data.muted ? '#ff4444' : '#ffaa00';
@@ -1271,7 +1165,6 @@ socket.on('spam-warning', (data) => {
     }
 });
 
-// Démute automatique (déclenché par le serveur après expiration)
 socket.on('spam-unmuted', () => {
     const chatInput = document.querySelector('.chat .input');
     if (chatInput) {
@@ -1320,8 +1213,6 @@ socket.on('sync-profiles', (profiles) => {
         };
         updatePeerUI(id, true);
     }
-    // Fix D: ask the room to re-broadcast profiles — handles the cross-node
-    // case where sync-profiles sent "Guest" because socket.data was unavailable
     socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
 
     setTimeout(() => {
@@ -1331,32 +1222,20 @@ socket.on('sync-profiles', (profiles) => {
     }, 300);
 });
 
-// Function to create room link with hidden profile
 async function createShortLink() {
-    // Extract room name from current URL
     const roomName = window.location.pathname.split('/').pop() || 'friends';
     const pseudo = myDisplayName;
     const color = myProfileColor.replace('#', '');
-    
+
     try {
         const response = await fetch('/api/room-profile', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                room: roomName,
-                pseudo: pseudo,
-                color: color
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: roomName, pseudo, color })
         });
-        
         const result = await response.json();
         if (result.ok) {
-            // Copy to clipboard
             await navigator.clipboard.writeText(result.url);
-            
-            // Show notification
             showNotification('Lien copié dans le presse-papiers !\n' + result.url);
         }
     } catch (error) {
@@ -1365,31 +1244,22 @@ async function createShortLink() {
     }
 }
 
-// Function to create transfer link using existing localStorage profile
 async function createTransferLink() {
-    // Use existing profile from localStorage (displayName and profileColor)
     const pseudo = localStorage.getItem('displayName') || myDisplayName;
     const color = localStorage.getItem('profileColor') || myProfileColor.replace('#', '');
     const currentRoom = window.location.pathname.split('/').pop() || 'friends';
-    
-    // Store profile in localStorage for cross-domain transfer
+
     localStorage.setItem('transferProfile', JSON.stringify({
         pseudo: pseudo,
         color: color.replace('#', ''),
         timestamp: Date.now()
     }));
-    
-    // Create clean link
+
     const transferLink = `${window.location.origin}/${currentRoom}`;
-    
-    // Copy to clipboard
     await navigator.clipboard.writeText(transferLink);
-    
-    // Show notification
     showNotification('Lien copié !\n' + transferLink + '\n\nLe profil sera transféré automatiquement.');
 }
 
-// Function to show notification
 function showNotification(message) {
     const notification = document.createElement('div');
     notification.style.cssText = `
@@ -1408,16 +1278,391 @@ function showNotification(message) {
     `;
     notification.textContent = message;
     document.body.appendChild(notification);
-    
     setTimeout(() => {
         notification.remove();
     }, 3000);
 }
 
-// Add keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'l') {
         e.preventDefault();
-        createTransferLink(); // Changed to transfer link
+        createTransferLink();
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

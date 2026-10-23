@@ -26,6 +26,8 @@ const STATS_PASSWORD = (process.env.STATS_PASSWORD || '').trim();
 const REDIS_URL = (process.env.REDIS_URL || '').trim();
 const TURN_URL = (process.env.TURN_URL || '').trim();
 const TURN_SECRET = (process.env.TURN_SECRET || process.env.TURN_AUTH_SECRET || '').trim();
+const TURN_USERNAME = (process.env.TURN_USERNAME || '').trim();
+const TURN_CREDENTIAL = (process.env.TURN_CREDENTIAL || '').trim();
 const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || '').trim();
 const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || '').trim();
 
@@ -66,8 +68,6 @@ async function initRedis() {
     client = createClient({
       url: REDIS_URL,
       socket: {
-        // abandonner apres quelques tentatives : le serveur bascule sur les
-        // fichiers locaux au lieu de boucler en erreur dans les logs
         reconnectStrategy: (retries) => (retries >= 3 ? new Error('redis abandonne') : Math.min(retries * 200, 1500)),
         connectTimeout: 5000,
       },
@@ -92,8 +92,6 @@ const store = {
     return memory.hashes.get(hash) || {};
   },
   async hSet(hash, key, value) {
-    // toujours stocke une chaine : Redis renvoie des strings, le mode
-    // fichier doit se comporter pareil pour que les deux soient equivalents
     const s = typeof value === 'string' ? value : JSON.stringify(value);
     if (redisClient) return await redisClient.hSet(hash, key, s);
     const h = memory.hashes.get(hash) || {};
@@ -144,9 +142,6 @@ const KEY_CONFIG = 'config';
 
 /* ─────────────────────────── Utilitaires ─────────────────────────── */
 
-/* Format de mot de passe : 16 a 128 caracteres imprimables sans espace.
-   Accepte les hex de 60/64 caracteres (MOT_DE_PASSE_NUL partagere avec le VPS)
-   comme les mots de passe generes (24 caracteres mixtes). */
 const HASH_RE = /^[!-~]{16,128}$/;
 
 function b64url(buf) {
@@ -184,7 +179,7 @@ function logLine(ip, browser, room) {
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ` +
     `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
   const letter = 'Z';
-  return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'}`;
+  return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'} `;
 }
 
 /* ─────────────────────────── En-tetes ─────────────────────────── */
@@ -223,7 +218,6 @@ app.use((req, res, next) => {
   next();
 });
 
-/* Journalisation des requetes (alimente le panneau admin) */
 app.use((req, res, next) => {
   res.on('finish', () => {
     if (req.path.startsWith('/socket.io')) return;
@@ -235,18 +229,12 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ─────────────────────────── Fichiers statiques ─────────────────────────── */
-
-app.use(
-  express.static(PUBLIC_DIR, {
-    index: false,
-    dotfiles: 'ignore',
-    maxAge: 0,
-    setHeaders(res) { res.setHeader('cache-control', 'public, max-age=0'); },
-  })
-);
-
-/* ─────────────────────────── API ─────────────────────────── */
+app.use(express.static(PUBLIC_DIR, {
+  index: false,
+  dotfiles: 'ignore',
+  maxAge: 0,
+  setHeaders(res) { res.setHeader('cache-control', 'public, max-age=0'); },
+}));
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: Math.floor(process.uptime()) });
@@ -274,10 +262,25 @@ async function fetchTwilioIce() {
   return list;
 }
 
+function buildMeteredIceServers() {
+  if (!TURN_USERNAME || !TURN_CREDENTIAL) return [];
+  return [
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    { urls: 'turn:global.relay.metered.ca:80', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
+    { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
+    { urls: 'turn:global.relay.metered.ca:443', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
+    { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
+  ];
+}
+
 app.get('/api/ice-servers', async (req, res) => {
   let servers = [];
   if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
     try { servers = await fetchTwilioIce(); } catch (e) { console.error('[ice] twilio :', e.message); }
+  }
+  if (!servers.length) {
+    const metered = buildMeteredIceServers();
+    if (metered.length) servers = metered;
   }
   if (!servers.length) {
     servers.push({ url: 'stun:global.stun.twilio.com:3478', urls: 'stun:global.stun.twilio.com:3478' });
@@ -347,8 +350,6 @@ app.post('/api/shorten', async (req, res) => {
   const short = `https://${req.headers.host || 'localhost'}/${randomId(6)}`;
   res.json({ ok: true, short });
 });
-
-/* ─────────────────────────── Admin ─────────────────────────── */
 
 const HASH_ADMIN_TOKENS = 'admin_tokens';
 
@@ -459,14 +460,10 @@ app.post('/admin/api/save-notes', async (req, res) => {
   res.json({ ok: true });
 });
 
-/* ─────────────────────────── Pages ─────────────────────────── */
-
 const notFound = (res, code = 404) => res.status(code).sendFile(path.join(PUBLIC_DIR, '404.html'));
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
-/* Toute route inconnue qui ressemble a un fichier renvoie la page 404 (400),
-   comme sur le site live ; sinon c'est une room. */
 app.get(/.*/, (req, res) => {
   const last = req.path.split('/').pop() || '';
   if (/\.[a-z0-9]{1,8}$/i.test(last)) return notFound(res, 400);
@@ -475,18 +472,17 @@ app.get(/.*/, (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'room.html'));
 });
 
-/* ─────────────────────────── Socket.io ─────────────────────────── */
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: false },
   maxHttpBufferSize: 1e6,
   pingTimeout: 20000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
 });
 
-/* Anti-spam : 3 messages / 5 s, 2 longs / 30 s, mute progressif par IP */
 const MUTE_STEPS = [15e3, 60e3, 600e3, 3600e3, 86400e3];
-const spamState = new Map(); // ip -> { window: [], longs: [], muteUntil, level }
+const spamState = new Map();
 
 function spamCheck(ip, message) {
   const now = Date.now();
@@ -659,8 +655,6 @@ io.on('connection', (socket) => {
   });
 });
 
-/* ─────────────────────────── Demarrage ─────────────────────────── */
-
 (async () => {
   redisClient = await initRedis();
   if (redisClient) {
@@ -679,3 +673,308 @@ io.on('connection', (socket) => {
     console.log(`Chaltet sur http://0.0.0.0:${PORT} (${redisClient ? 'redis' : 'fichiers locaux'})`);
   });
 })();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
