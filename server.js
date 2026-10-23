@@ -826,7 +826,9 @@ io.on('connection', (socket) => {
     if (event === 'mod-mute' || event === 'mod-unmute') {
       const muted = event === 'mod-mute';
       io.to(id).emit('mod-action', { type: muted ? 'muted' : 'unmuted', by });
-      io.to(id).emit('mod-mute-ack', { targetId: id, muted });
+      // L'ack revient au moderateur (celui qui a clique), pas a la cible :
+      // c'est lui qui tient mutedPeers pour basculer le bouton Mute/Unmute.
+      socket.emit('mod-mute-ack', { targetId: id, muted });
       return;
     }
     if (event === 'mod-kick' || event === 'mod-kick-temp' || event === 'mod-ban') {
