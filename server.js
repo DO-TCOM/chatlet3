@@ -284,11 +284,22 @@ app.use((req, res, next) => {
   next();
 });
 
+// TTL par type d'asset : le code (CSS/JS) reste court pour que les deploiements
+// se propagent vite, les medias/fonts peuvent etre caches longtemps.
+const ASSET_CODE_RE = /\.(css|js|mjs)$/i;
+const ASSET_MEDIA_RE = /\.(png|jpe?g|gif|webp|avif|svg|ico|mp3|mp4|webm|wav|ogg|woff2?|ttf|otf)$/i;
+
 app.use(express.static(PUBLIC_DIR, {
   index: false,
   dotfiles: 'ignore',
   maxAge: 0,
-  setHeaders(res) { res.setHeader('cache-control', 'public, max-age=0'); },
+  setHeaders(res, filePath) {
+    // Sans un max-age reel, Cloudflare renvoie cf-cache-status: DYNAMIC et le CDN
+    // ne met rien en cache. Les HTML passent par sendFile et restent en max-age=0.
+    if (ASSET_CODE_RE.test(filePath)) { res.setHeader('cache-control', 'public, max-age=600'); return; }
+    if (ASSET_MEDIA_RE.test(filePath)) { res.setHeader('cache-control', 'public, max-age=604800'); return; }
+    res.setHeader('cache-control', 'public, max-age=0');
+  },
 }));
 
 app.get('/health', (req, res) => {
