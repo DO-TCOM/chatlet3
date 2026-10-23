@@ -21,6 +21,14 @@ socket.on('connect_error', () => {
     document.body.appendChild(banner);
 });
 
+const roomId = window.location.pathname.split('/').pop() || 'friends';
+
+// socket.io v4 n'emet plus l'evenement "reconnect" sur le Socket (il est passe sur
+// le Manager). L'ancien handler ne se declenchait donc jamais : apres une coupure
+// reseau, le client gardait des peers fantomes et ne rejoignait plus la salle.
+// On reutilise "connect" en ignorant la toute premiere connexion.
+let hasConnectedOnce = false;
+
 socket.on('connect', () => {
     connectErrorCount = 0;
     const banner = document.getElementById('connection-error');
