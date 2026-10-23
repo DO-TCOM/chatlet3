@@ -90,7 +90,7 @@ async function start(useVideo, useAudio) {
         } catch (err) { console.error('Media error:', err); }
     }
 
-    socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+    socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
     socket.emit('join-room', roomId);
 
     if (_urlPseudo || _urlColor) {
@@ -147,7 +147,7 @@ socket.on('user-connected', (userId) => {
     syncLocalTracksToPeers();
 
     if (myDisplayName && myProfileColor) {
-        socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
+        socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
     }
 
     if (isModerator) {

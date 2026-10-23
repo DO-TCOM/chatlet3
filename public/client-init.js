@@ -226,7 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         myDisplayName = e.target.value.substring(0, 50);
         localStorage.setItem('displayName', myDisplayName);
         updateLocalProfileUI();
-        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
     });
 
     chatInputField.maxLength = 200;

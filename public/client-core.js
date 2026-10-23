@@ -14,14 +14,21 @@ socket.on('connect_error', () => {
     document.body.appendChild(banner);
 });
 
+const roomId = window.location.pathname.split('/').pop() || 'friends';
+
+// socket.io v4 n'emet plus l'evenement "reconnect" sur le Socket (il est passe sur
+// le Manager). L'ancien handler ne se declenchait donc jamais : apres une coupure
+// reseau, le client gardait des peers fantomes et ne rejoignait plus la salle.
+// On reutilise "connect" en ignorant la toute premiere connexion.
+let hasConnectedOnce = false;
+
 socket.on('connect', () => {
     const banner = document.getElementById('connection-error');
     if (banner) banner.remove();
-});
 
-const roomId = window.location.pathname.split('/').pop() || 'friends';
+    if (!hasConnectedOnce) { hasConnectedOnce = true; return; }
 
-socket.on('reconnect', () => {
+    // Reconnexion : nettoyage des connexions cassees, puis rejointe de la salle.
     for (const id in peers) {
         try { peers[id].close(); } catch(e) {}
         delete peers[id];
@@ -35,7 +42,7 @@ socket.on('reconnect', () => {
     const modSecret = localStorage.getItem('modSecret');
     if (modSecret) setTimeout(() => socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }), 500);
     if (roomId) {
-        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
         socket.emit('join-room', roomId);
     }
     if (isModerator) {
@@ -217,7 +224,7 @@ localStorage.setItem('profileColor', myProfileColor);
         if (nameInput) nameInput.value = myDisplayName;
         if (typeof updateLocalProfileUI === 'function') updateLocalProfileUI();
         if (socket && socket.connected && roomId) {
-            socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+            socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
         }
     }
 })();
@@ -265,6 +272,10 @@ const audioMessage = document.getElementById('audioMessage');
 const remoteProfiles = {};
 const mutedPeers = new Set();
 let screenStream;
+// Bouton de partage d'ecran : le style .toggleScreenShare existe deja dans
+// client.css mais le bouton n'est pas encore dans room.html. Declaration
+// obligatoire : sans elle, stopScreenShare() leverait un ReferenceError.
+let toggleScreenShareBtn = null;
 let featuredUserId = null;
 let iceServersConfig = [{ urls: 'stun:stun.l.google.com:19302' }];
 

@@ -307,7 +307,7 @@
     <!-- Profile Modal -->
     <div id="profileModal">
         <div class="modal-card">
-            <button class="modal-close" onclick="document.getElementById('profileModal').classList.remove('open')">✕</button>
+            <button class="modal-close" id="modalCloseBtn">✕</button>
             <div class="modal-title" id="modal-title">Profil</div>
             <div class="modal-grid" id="modal-grid"></div>
             <div class="modal-pseudos">
@@ -319,7 +319,7 @@
                 <label style="font-size:10px;color:#888;text-transform:uppercase;">Lien personnalisé</label>
                 <div style="display:flex;gap:8px;margin-top:6px;">
                     <input id="modal-room-input" type="text" placeholder="nom-du-salon" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
-                    <button onclick="generateShortLink()" style="padding:6px 12px;background:#007cba;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Générer</button>
+                    <button id="generateShortBtn" style="padding:6px 12px;background:#007cba;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Générer</button>
                 </div>
                 <div id="modal-short-link" style="margin-top:8px;font-size:12px;word-break:break-all;"></div>
             </div>
@@ -330,6 +330,15 @@
         let sessionToken = sessionStorage.getItem('adminToken') || '';
         let showExtras = false;
         let lastData = null;
+
+        // Echappement systematique. Les valeurs affichees proviennent de
+        // /api/collect (champs envoyes par le visiteur), des logs (IP lue dans
+        // un en-tete HTTP) et des notes admin. Injectees brutes dans innerHTML,
+        // elles permettaient du JS dans la session admin (vol du token).
+        const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        // Couleur injectee dans un attribut style : on n'accepte que #RRGGBB.
+        const safeColor = (v, fallback) => /^#[0-9a-fA-F]{6}$/.test(String(v || '')) ? v : fallback;
 
         // Auto-login: si pas de token valide, faire le login automatiquement
         (async function autoLogin() {
@@ -539,35 +548,36 @@
                 const note = data.notes[g.ip] || '';
                 const rowClass = rule.blocked ? 'blocked-row' : (rule.whitelist ? 'white-row' : '');
                 window._profileMap[g.ip] = { g, extra };
+                const dotColor = safeColor(extra.url_color, '#888');
                 
                 return `<tr class="${rowClass}">
-                    <td style="text-align:center"><input type="checkbox" class="line-cb cb-sel" data-indices='${JSON.stringify(g.indices)}'></td>
-                    <td class="lettre-big profile-trigger" data-ip="${g.ip}" style='cursor:pointer;'>${g.letter}${g.count > 1 ? `<span class="count">${g.count}x</span>` : ''}</td>
-                    <td class="ip-cell profile-trigger" data-ip="${g.ip}" style='cursor:pointer;text-decoration:underline;'>${g.ip}</td>
-                    <td>${g.city}<br><small style="color:#888">${g.country}</small></td>
-                    <td class="pseudo">${(() => { const all = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : []; const last3 = all.slice(-3); const rest = all.length - 3; return last3.length ? last3.map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${extra.url_color||'#888'};margin-right:4px;vertical-align:middle;'></span>${p}</div>`).join('') + (rest > 0 ? `<div style='color:#888;font-size:10px'>+${rest} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'; })()}</td>
-                    <td style="font-size:11px; white-space:nowrap;">${g.date}</td>
-                    <td style="text-align:center">${g.browser}</td>
+                    <td style="text-align:center"><input type="checkbox" class="line-cb cb-sel" data-indices='${esc(JSON.stringify(g.indices))}'></td>
+                    <td class="lettre-big profile-trigger" data-ip="${esc(g.ip)}" style='cursor:pointer;'>${esc(g.letter)}${g.count > 1 ? `<span class="count">${esc(g.count)}x</span>` : ''}</td>
+                    <td class="ip-cell profile-trigger" data-ip="${esc(g.ip)}" style='cursor:pointer;text-decoration:underline;'>${esc(g.ip)}</td>
+                    <td>${esc(g.city)}<br><small style="color:#888">${esc(g.country)}</small></td>
+                    <td class="pseudo">${(() => { const all = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : []; const last3 = all.slice(-3); const rest = all.length - 3; return last3.length ? last3.map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:4px;vertical-align:middle;'></span>${esc(p)}</div>`).join('') + (rest > 0 ? `<div style='color:#888;font-size:10px'>+${rest} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'; })()}</td>
+                    <td style="font-size:11px; white-space:nowrap;">${esc(g.date)}</td>
+                    <td style="text-align:center">${esc(g.browser)}</td>
                     <td class="vpn-badge">${g.vpn ? '🔒' : ''}</td>
                     
-                    <td class="extra ${((parseInt(extra.battery_level) || 100) <= 20) ? 'bat-low' : 'bat-ok'}">${extra.battery_level || 'N/A'}</td>
-                    <td class="extra">${extra.battery_charging || 'N/A'}</td>
-                    <td class="extra">${extra.screen || 'N/A'}</td>
-                    <td class="extra">${extra.lang || 'N/A'}</td>
-                    <td class="extra">${(extra.timezone || 'N/A').split('/').pop()}</td>
-                    <td class="extra">${extra.cores || 'N/A'}</td>
-                    <td class="extra">${extra.ram || 'N/A'}</td>
-                    <td class="extra">${extra.connection || 'N/A'}</td>
-                    <td class="extra">${extra.touch || 'N/A'}</td>
-                    <td class="extra" style="font-size:9px">${extra.platform || 'N/A'}</td>
-                    <td class="extra">${extra.darkmode || 'N/A'}</td>
+                    <td class="extra ${((parseInt(extra.battery_level) || 100) <= 20) ? 'bat-low' : 'bat-ok'}">${esc(extra.battery_level || 'N/A')}</td>
+                    <td class="extra">${esc(extra.battery_charging || 'N/A')}</td>
+                    <td class="extra">${esc(extra.screen || 'N/A')}</td>
+                    <td class="extra">${esc(extra.lang || 'N/A')}</td>
+                    <td class="extra">${esc((extra.timezone || 'N/A').split('/').pop())}</td>
+                    <td class="extra">${esc(extra.cores || 'N/A')}</td>
+                    <td class="extra">${esc(extra.ram || 'N/A')}</td>
+                    <td class="extra">${esc(extra.connection || 'N/A')}</td>
+                    <td class="extra">${esc(extra.touch || 'N/A')}</td>
+                    <td class="extra" style="font-size:9px">${esc(extra.platform || 'N/A')}</td>
+                    <td class="extra">${esc(extra.darkmode || 'N/A')}</td>
                     
-                    <td><input type="text" class="note-input" data-ip="${g.ip}" value="${note}"></td>
+                    <td><input type="text" class="note-input" data-ip="${esc(g.ip)}" value="${esc(note)}"></td>
                     <td style="text-align:center">
-                        <input type="checkbox" class="cb-block" ${rule.blocked ? 'checked' : ''} data-ip="${g.ip}" data-field="blocked">
+                        <input type="checkbox" class="cb-block" ${rule.blocked ? 'checked' : ''} data-ip="${esc(g.ip)}" data-field="blocked">
                     </td>
                     <td style="text-align:center">
-                        <input type="checkbox" class="cb-white" ${rule.whitelist ? 'checked' : ''} data-ip="${g.ip}" data-field="whitelist">
+                        <input type="checkbox" class="cb-white" ${rule.whitelist ? 'checked' : ''} data-ip="${esc(g.ip)}" data-field="whitelist">
                     </td>
                 </tr>`;
             }).join('');
@@ -598,25 +608,40 @@
             const { g, extra } = _currentProfile;
             const pseudo = (extra && extra.url_pseudo) || '';
             const color = (extra && extra.url_color) ? extra.url_color.replace('#', '') : '';
-            let url = 'https://chaltet.com/' + room;
+            let url = 'https://chaltet.com/' + encodeURIComponent(room);
             if (pseudo) url += '?pseudo=' + encodeURIComponent(pseudo);
-            if (color) url += (pseudo ? '&' : '?') + 'color=' + color;
+            if (color) url += (pseudo ? '&' : '?') + 'color=' + encodeURIComponent(color);
             
+            // Le serveur exige un token admin : sans lui, la requete retournait
+            // un 401 silencieux et la fonction ne produisait jamais rien.
             const res = await fetch('/api/shorten', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ url })
+                body: JSON.stringify({ url, token: sessionToken })
             });
             const data = await res.json();
-            if (data.ok) {
+            if (res.status === 401) { alert('Session expirée — reconnectez-vous.'); return; }
+            if (data.ok && /^https:\/\//i.test(String(data.short || ''))) {
                 const el = document.getElementById('modal-short-link');
-                el.innerHTML = '<a href="' + data.short + '" target="_blank">' + data.short + '</a> <button id="copyButton" style="font-size:11px;padding:2px 6px;cursor:pointer;">Copier</button>';
-                
-                // Add click event listener to avoid CSP issues
-                const copyBtn = document.getElementById('copyButton');
+                el.textContent = '';
+
+                const a = document.createElement('a');
+                a.href = data.short;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = data.short;
+
+                const copyBtn = document.createElement('button');
+                copyBtn.id = 'copyButton';
+                copyBtn.style.cssText = 'font-size:11px;padding:2px 6px;cursor:pointer;';
+                copyBtn.textContent = 'Copier';
                 copyBtn.addEventListener('click', () => {
                     navigator.clipboard.writeText(data.short);
                 });
+
+                el.appendChild(a);
+                el.appendChild(document.createTextNode(' '));
+                el.appendChild(copyBtn);
             }
         }
 
@@ -642,17 +667,17 @@
             ];
             
             document.getElementById('modal-grid').innerHTML = fields.map(([label, val]) =>
-                '<div class="modal-item"><label>' + label + '</label><span>' + val + '</span></div>'
+                '<div class="modal-item"><label>' + esc(label) + '</label><span>' + esc(val) + '</span></div>'
             ).join('');
             
             const pseudos = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : [];
-            const pcolor = extra.url_color || '';
+            const pcolor = safeColor(extra.url_color, '');
             document.getElementById('modal-pseudos').innerHTML = pseudos.length
-                ? pseudos.map(p => '<span class="pseudo-tag" style="' + (pcolor ? 'background:' + pcolor + ';' : '') + '">' + p + '</span>').join('')
+                ? pseudos.map(p => '<span class="pseudo-tag" style="' + (pcolor ? 'background:' + pcolor + ';' : '') + '">' + esc(p) + '</span>').join('')
                 : '<span style="color:#aaa;font-size:12px">Aucun pseudo connu</span>';
             
             const rooms = Array.from(g.rooms);
-            document.getElementById('modal-rooms').innerHTML = rooms.length
+            document.getElementById('modal-rooms').textContent = rooms.length
                 ? '🚪 Salons visités : ' + rooms.map(r => '/' + r).join(', ')
                 : '';
             
@@ -685,6 +710,14 @@
                 }
             }
         });
+
+        // Les onclick inline sont bloques par la CSP (script-src-attr 'none', cf.
+        // en-tetes de server.js) : les deux boutons de la modale etaient donc
+        // morts. Ils sont branches ici, en JavaScript.
+        document.getElementById('modalCloseBtn').addEventListener('click', () => {
+            document.getElementById('profileModal').classList.remove('open');
+        });
+        document.getElementById('generateShortBtn').addEventListener('click', generateShortLink);
     </script>
 </body>
 </html>

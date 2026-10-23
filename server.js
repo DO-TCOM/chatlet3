@@ -131,6 +131,15 @@ const store = {
     arr.splice(index, 1);
     await store.lSet(key, arr);
   },
+  // Ne garde que les `max` dernieres entrees : sans cela la liste grossit sans
+  // borne et finit par depasser le quota (64 Mo) du Redis Upstash gratuit.
+  async lTrimLast(key, max) {
+    if (redisClient) return await redisClient.lTrim(key, -max, -1);
+    const l = memory.lists.get(key) || [];
+    const kept = l.slice(-max);
+    memory.lists.set(key, kept);
+    writeFile('list', key, kept);
+  },
 };
 
 const HASH_PROFILES = 'socket_profiles';
@@ -139,6 +148,8 @@ const HASH_BLACKLIST = 'blacklist';
 const HASH_EXTRAS = 'extras';
 const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
+// Nombre maximum de lignes de logs conservees (voir store.lTrimLast).
+const LOGS_MAX_LINES = 5000;
 
 const HASH_RE = /^[!-~]{16,128}$/;
 
@@ -179,6 +190,11 @@ function cleanText(s, max) {
   return String(s == null ? '' : s).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, max);
 }
 function clientIp(req) {
+  // Derriere Cloudflare, cf-connecting-ip est pose par le CDN et ecrase la valeur
+  // envoyee par le client : c'est la seule valeur fiable. X-Forwarded-For reste un
+  // repli (appels directs au serveur, tests locaux).
+  const cf = (req.headers['cf-connecting-ip'] || '').trim();
+  if (cf) return cf;
   return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
 }
 function detectBrowser(ua) {
@@ -269,6 +285,8 @@ app.use((req, res, next) => {
   next();
 });
 
+let logWritesSinceTrim = 0;
+
 app.use((req, res, next) => {
   res.on('finish', () => {
     if (req.path.startsWith('/socket.io')) return;
@@ -280,6 +298,12 @@ app.use((req, res, next) => {
     const browser = detectBrowser(req.headers['user-agent']);
     const room = req.path === '/' ? '/' : req.path.replace(/^\//, '');
     store.rPush(KEY_LOGS, logLine(ip, browser, room)).catch(() => {});
+    // Rotation : un trim tous les 50 enregistrements evite une commande Redis
+    // par requete tout en bornant la taille de la liste.
+    if (++logWritesSinceTrim >= 50) {
+      logWritesSinceTrim = 0;
+      store.lTrimLast(KEY_LOGS, LOGS_MAX_LINES).catch(() => {});
+    }
   });
   next();
 });
@@ -462,7 +486,26 @@ app.post('/admin/api/data', async (req, res) => {
   const rawBl = await store.hGetAll(HASH_BLACKLIST);
   const rawConfig = await store.hGetAll(KEY_CONFIG);
   const extras = {};
-  for (const [k, v] of Object.entries(rawExtras)) extras[k] = parse(v);
+  // /api/collect indexe les entrees sous la cle UUID fournie par le visiteur,
+  // alors que le panneau les consulte par IP (data.extras[g.ip]) : ces
+  // informations n'apparaissaient donc jamais. On re-cle a la lecture via
+  // l'IP enregistree dans chaque valeur.
+  for (const [k, v] of Object.entries(rawExtras)) {
+    const rec = parse(v);
+    if (!rec || typeof rec !== 'object') continue;
+    const ipKey = cleanText(rec.ip, 64) || k;
+    const prev = extras[ipKey];
+    if (!prev) { extras[ipKey] = rec; continue; }
+    // Meme IP avec UUID differents (connexions partagees) : on fusionne la
+    // liste de pseudos et on conserve les champs les plus recents.
+    const merged = { ...rec, ts: Math.max(Number(prev.ts) || 0, Number(rec.ts) || 0) };
+    const all = new Set([
+      ...String(prev.pseudos || '').split(', '),
+      ...String(rec.pseudos || '').split(', '),
+    ].filter(Boolean));
+    if (all.size) merged.pseudos = Array.from(all).join(', ');
+    extras[ipKey] = merged;
+  }
   res.json({
     ok: true,
     logs: logs.join('\n'),
@@ -566,32 +609,57 @@ const spamState = new Map();
 
 function spamCheck(ip, message) {
   const now = Date.now();
-  const st = spamState.get(ip) || { window: [], longs: [], muteUntil: 0, level: 0 };
+  const st = spamState.get(ip) || { window: [], longs: [], muteUntil: 0, level: 0, lastSeen: 0 };
+  st.lastSeen = now;
   spamState.set(ip, st);
 
   if (st.muteUntil > now) {
     const left = Math.ceil((st.muteUntil - now) / 1000);
-    return { blocked: true, muted: true, message: `Tu es mute. Reessaye dans ${left}s.` };
+    return { blocked: true, muted: true, muteExpired: false, message: `Tu es mute. Reessaye dans ${left}s.` };
   }
+  // Un mute existait et vient d'expirer : le client doit etre prevenu pour
+  // reactiver son champ de message (event spam-unmuted).
+  const muteExpired = st.muteUntil > 0;
+  st.muteUntil = 0;
   st.window = st.window.filter((t) => now - t < 5000);
   st.longs = st.longs.filter((t) => now - t < 30000);
 
   if (st.window.length >= 3) {
     st.level = Math.min(st.level + 1, MUTE_STEPS.length - 1);
     st.muteUntil = now + MUTE_STEPS[st.level];
-    return { blocked: true, muted: true, message: 'Trop de messages. Tu es mute temporairement.' };
+    return { blocked: true, muted: true, muteExpired: false, message: 'Trop de messages. Tu es mute temporairement.' };
   }
   if (String(message || '').length > 100) {
     if (st.longs.length >= 2) {
       st.level = Math.min(st.level + 1, MUTE_STEPS.length - 1);
       st.muteUntil = now + MUTE_STEPS[st.level];
-      return { blocked: true, muted: true, message: 'Trop de messages longs. Tu es mute temporairement.' };
+      return { blocked: true, muted: true, muteExpired: false, message: 'Trop de messages longs. Tu es mute temporairement.' };
     }
     st.longs.push(now);
   }
   st.window.push(now);
-  return { blocked: false, muted: false, message: '' };
+  // Note : le niveau d'escalade n'est pas remis a zero (escalade stricte).
+  return { blocked: false, muted: false, muteExpired, message: '' };
 }
+
+/* spamState est indexe par IP, une cle librement falsifiable : la Map doit
+   etre purgee periodiquement, comme authAttempts plus haut.               */
+const SPAM_PURGE_MS = 10 * 60 * 1000;
+const SPAM_MAX_ENTRIES = 20000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, st] of spamState) {
+    const idle = now - (st.lastSeen || 0);
+    if (st.muteUntil <= now && idle > 60 * 60 * 1000) spamState.delete(ip);
+  }
+  // Filet de securite : si la Map explose malgre la purge, on tronque.
+  if (spamState.size > SPAM_MAX_ENTRIES) {
+    for (const ip of spamState.keys()) {
+      if (spamState.size <= SPAM_MAX_ENTRIES) break;
+      spamState.delete(ip);
+    }
+  }
+}, SPAM_PURGE_MS).unref();
 
 function isMod(socket) {
   return socket.data && socket.data.isMod === true;
@@ -600,12 +668,41 @@ function modBy(socket) {
   return (socket.data && socket.data.modName) || 'Mod';
 }
 
+/* Applique les reglages admin (blacklist / liste blanche / redirection).
+   Ils etaient enregistres par /admin/api/toggle et /admin/api/config mais
+   jamais verifies : cocher "bloqué" n'avait aucun effet.                  */
+async function checkRoomAccess(ip) {
+  const rules = await store.hGetAll(HASH_BLACKLIST);
+  let rec = null;
+  const raw = rules ? rules[ip] : undefined;
+  if (raw) {
+    try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { rec = null; }
+  }
+  if (rec && rec.blocked === true) return { allowed: false, reason: 'banned', redirect: '' };
+
+  const cfg = await store.hGetAll(KEY_CONFIG);
+  const whitelistMode = cfg && (cfg.whitelist_mode === 'true' || cfg.whitelist_mode === true);
+  if (whitelistMode && !(rec && rec.whitelist === true)) {
+    return { allowed: false, reason: 'whitelist', redirect: String((cfg && cfg.redirect_url) || '') };
+  }
+  return { allowed: true };
+}
+
 io.on('connection', (socket) => {
   socket.data = { room: null, profile: { displayName: 'Guest', profileColor: '#4A90E2' }, isMod: false, modName: 'Mod' };
   const ip = clientIp(socket.request);
 
   socket.on('join-room', async (roomId) => {
     const room = cleanText(roomId, 64) || 'friends';
+
+    // Blacklist / liste blanche : refus avant de rejoindre la salle.
+    const access = await checkRoomAccess(ip);
+    if (!access.allowed) {
+      socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect });
+      socket.disconnect(true);
+      return;
+    }
+
     const prev = socket.data.room;
     if (prev && prev !== room) await socket.leave(prev);
 
@@ -669,6 +766,8 @@ io.on('connection', (socket) => {
       socket.emit('spam-warning', check);
       return;
     }
+    // Le mute automatique vient d'expirer : le client re-active son champ de saisie.
+    if (check.muteExpired) socket.emit('spam-unmuted');
     const payload = {
       id: socket.id,
       userName: cleanText(data && data.userName, 50) || 'Guest',

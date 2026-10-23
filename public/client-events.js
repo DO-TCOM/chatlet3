@@ -66,12 +66,27 @@ socket.on('sync-profiles', (profiles) => {
         };
         updatePeerUI(id, true);
     }
-    socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
+    socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
 
     setTimeout(() => {
         if (isModerator) {
             document.querySelectorAll('.peer.miniature').forEach(peer => addModButtons(peer));
         }
     }, 300);
+});
+
+socket.on('room-blocked', (data) => {
+    const reason = (data && data.reason) || 'banned';
+    const redirect = String((data && data.redirect) || '').trim();
+    socket.disconnect();
+
+    // Mode liste blanche + redirection parametree par l'admin (redirect_url).
+    if (reason === 'whitelist' && /^https?:\/\//i.test(redirect)) {
+        window.location.href = redirect;
+        return;
+    }
+    showModOverlay(reason === 'whitelist' ? 'ACCES RESTREINT' : 'BAN', () => {
+        window.location.href = 'https://www.google.com';
+    });
 });
 
