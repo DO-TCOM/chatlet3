@@ -200,6 +200,41 @@ function logLine(ip, browser, room) {
   return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'} `;
 }
 
+/* ─────────────────── Limiteur d'authentification ─────────────────── */
+/* Compte les tentatives de login admin et de mod-auth socket par IP.  */
+/* Le compteur est remis a zero des qu'une tentative reussit, afin de  */
+/* ne pas penaliser un moderateur legitime.                            */
+
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 10;
+const authAttempts = new Map();
+
+function authRateLimit(ip) {
+  const now = Date.now();
+  let st = authAttempts.get(ip);
+  if (!st || now >= st.resetAt) {
+    st = { count: 0, resetAt: now + AUTH_WINDOW_MS };
+    authAttempts.set(ip, st);
+  }
+  st.count += 1;
+  return {
+    blocked: st.count > AUTH_MAX_ATTEMPTS,
+    retryAfter: Math.ceil((st.resetAt - now) / 1000),
+  };
+}
+function authRateClear(ip) {
+  authAttempts.delete(ip);
+}
+
+/* Purge periodique : evite que la Map croisse sans borne, un IP etant
+   une cle librement falsifiable via X-Forwarded-For.                  */
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, st] of authAttempts) {
+    if (now >= st.resetAt) authAttempts.delete(ip);
+  }
+}, AUTH_WINDOW_MS).unref();
+
 app.use((req, res, next) => {
   const host = req.headers.host || 'localhost';
   const wss = 'wss://' + host;
@@ -237,6 +272,10 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   res.on('finish', () => {
     if (req.path.startsWith('/socket.io')) return;
+    // Health checks Render : ~518k commandes/mois, hors quota Upstash free.
+    if (req.path === '/health') return;
+    // Fichiers statiques (.css/.js/.img/son) : ~20 lignes par page, pas des visites.
+    if (/\.[a-z0-9]{1,8}$/i.test(req.path)) return;
     const ip = clientIp(req);
     const browser = detectBrowser(req.headers['user-agent']);
     const room = req.path === '/' ? '/' : req.path.replace(/^\//, '');
@@ -387,12 +426,18 @@ async function isValidAdminToken(token) {
 }
 
 app.post('/admin/api/login', async (req, res) => {
+  const ip = clientIp(req);
+  const limit = authRateLimit(ip);
+  if (limit.blocked) {
+    return res.status(429).json({ ok: false, message: `Trop de tentatives. Reessaye dans ${limit.retryAfter}s.` });
+  }
   const password = cleanText(req.body && req.body.password, 128);
   if (!HASH_RE.test(password)) {
     return res.status(400).json({ ok: false, message: 'Invalid password format' });
   }
   const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
   if (!ok) return res.status(401).json({ ok: false, message: 'Mot de passe incorrect' });
+  authRateClear(ip);
   res.json({ ok: true, token: await issueAdminToken() });
 });
 
@@ -643,8 +688,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mod-auth', (data) => {
+    const limit = authRateLimit(ip);
+    if (limit.blocked) {
+      socket.emit('mod-status', false);
+      return;
+    }
     const password = cleanText(data && data.password, 128);
     const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
+    if (ok) authRateClear(ip);
     socket.data.isMod = ok;
     socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
     socket.emit('mod-status', ok);
