@@ -140,8 +140,6 @@ const HASH_EXTRAS = 'extras';
 const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
 
-/* ─────────────────────────── Utilitaires ─────────────────────────── */
-
 const HASH_RE = /^[!-~]{16,128}$/;
 
 function b64url(buf) {
@@ -181,8 +179,6 @@ function logLine(ip, browser, room) {
   const letter = 'Z';
   return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'} `;
 }
-
-/* ─────────────────────────── En-tetes ─────────────────────────── */
 
 app.use((req, res, next) => {
   const host = req.headers.host || 'localhost';
@@ -547,6 +543,16 @@ io.on('connection', (socket) => {
     socket.emit('sync-profiles', mine);
   });
 
+  socket.on('leave-room', async (roomId) => {
+    const room = cleanText(roomId, 64) || socket.data.room;
+    if (!room) return;
+    const prev = socket.data.room;
+    if (prev && prev === room) socket.data.room = null;
+    await socket.leave(room);
+    socket.to(room).emit('user-disconnected', socket.id);
+    await store.hDel(HASH_PROFILES, `${room}:${socket.id}`);
+  });
+
   socket.on('profile-update', async (data) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
     if (!room) return;
@@ -673,234 +679,6 @@ io.on('connection', (socket) => {
     console.log(`Chaltet sur http://0.0.0.0:${PORT} (${redisClient ? 'redis' : 'fichiers locaux'})`);
   });
 })();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
