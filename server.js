@@ -580,6 +580,16 @@ const notFound = (res, code = 404) => res.status(code).sendFile(path.join(PUBLIC
 
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
+// Servir les assets statiques même s'ils sont demandés avec le préfixe de la room (ex: /friends/client.css)
+app.get('/:room/:file([a-zA-Z0-9_.-]+\\.[a-z0-9]{1,8})', (req, res, next) => {
+  const file = path.basename(req.params.file);
+  const filePath = path.join(PUBLIC_DIR, file);
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+  next();
+});
+
 app.get('/:room', (req, res) => {
   const room = decodeURIComponent(req.params.room || '').trim();
   if (!room) return notFound(res, 404);
