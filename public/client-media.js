@@ -1,194 +1,180 @@
-function syncLocalTracksToPeers() {
-    if (!localStream) return;
-    const streamTracks = localStream.getTracks();
-    for (const id in peers) {
-        const pc = peers[id];
-        if (!pc || !pc.getSenders) continue;
-        const senders = pc.getSenders();
-        streamTracks.forEach(track => {
-            const exists = senders.some(sender => sender.track && sender.track.id === track.id);
-            if (!exists) pc.addTrack(track, localStream);
-        });
-    }
-}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chaltet</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0"/>
+    <meta name="description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted."/>
+    
+    <!-- Meta Tags -->
+    <meta itemprop="name" content="Chaltet">
+    <meta itemprop="description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted.">
+    <meta property="og:title" content="Chaltet">
+    <meta property="og:description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted.">
+    <meta property="og:site_name" content="Chaltet">
+    <meta property="og:type" content="website">
+    
+    <!-- Links -->
+    <link rel="manifest" href="manifest.json">
+    <link href="fonts.css" rel="stylesheet">
+    <link href="client.css" rel="stylesheet">
+</head>
+<body class="client" itemscope itemtype="http://schema.org/WebPage">
+    <!-- Background Layer -->
+    <div class="layer background"></div>
 
-async function handleToggleVideo() {
-    if (!localStream) localStream = new MediaStream();
+    <!-- Welcome Layer -->
+    <div class="layer welcome">
+        <div class="content">
+            <h1 class="h1 title">Chaltet</h1>
+            <small class="small">You are about to join room</small>
+            <div class="roomName">...</div>
+        </div>
+        <button class="button joinVideo">
+            <div class="buttonLabel">Join with Video</div>
+        </button>
+        <button class="button joinAudio">
+            <div class="buttonLabel">Join with Audio</div>
+        </button>
+        <button class="button joinChat">
+            <div class="buttonLabel">Join Chat Only</div>
+        </button>
+    </div>
 
-    if (localStream.getVideoTracks().length === 0) {
-        try {
-            const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } });
-            const track = newStream.getVideoTracks()[0];
-            localStream.addTrack(track);
-            syncLocalTracksToPeers();
-        } catch (err) { console.error('Media error:', err); return; }
-    }
+    <!-- Notification (Hidden) -->
+    <div class="notification hidden"><span class="span closeButton"></span></div>
 
-    updateLocalVideoElement(localStream);
-    const track = localStream.getVideoTracks()[0];
-    track.enabled = !track.enabled;
-    toggleVideoBtn.classList.toggle('off', !track.enabled);
-    updateVideoVisibility('local', track.enabled);
-    socket.emit('video-status', { roomId, enabled: track.enabled });
-}
+    <!-- Conversation Layer -->
+    <div class="layer conversation hidden">
+        <div class="toggleButtonContainer">
+            <button class="button toggleVideo off" title="Camera"></button>
+            <button class="button toggleAudio off" title="Microphone"></button>
+            <button class="button toggleScreenShare off" title="Share Screen"></button>
+        </div>
+        <audio id="audioUnconvinced" src="/unconvinced.mp3"></audio>
+        <audio id="audioUnsure" src="/unsure.mp3"></audio>
+        <audio id="audioMessage" src="/yeuxsurmoi.mp3"></audio>
+        
+        <div class="peer local">
+            <video class="video" autoplay playsinline muted disablepictureinpicture></video>
+            <div class="name">You</div>
+        </div>
 
-async function handleToggleAudio() {
-    if (!localStream) localStream = new MediaStream();
+        <div class="peer featured hidden">
+            <video class="video" autoplay playsinline disablepictureinpicture></video>
+            <div class="name">Guest</div>
+            <button class="button toggleRemoteVideo" title="Toggle Video"></button>
+            <button class="button toggleMute" title="Mute/Unmute"></button>
+        </div>
+    </div>
 
-    if (localStream.getAudioTracks().length === 0) {
-        try {
-            const newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const track = newStream.getAudioTracks()[0];
-            localStream.addTrack(track);
-            setupAudioAnalysis(localStream);
-            syncLocalTracksToPeers();
-        } catch (err) { console.error('Media error:', err); return; }
-    }
+    <!-- Chat Layer (Hidden initially) -->
+    <div class="layer chat hidden">
+        <div class="panel hidden">
+            <div class="messages">
+                <div class="message hint">Welcome to Chaltet!</div>
+                <div class="message hint">You can share this link with someone to start chatting</div>
+                <code class="code message hint" id="inviteLink">chaltet.com/friends</code>
+            </div>
+            <input class="input" type="text" placeholder="">
+        </div>
+        <button class="button toggleChat" title="Room Details"></button>
+        <div class="snippet">Welcome to Chaltet!</div>
+    </div>
 
-    const track = localStream.getAudioTracks()[0];
-    track.enabled = !track.enabled;
-    toggleAudioBtn.classList.toggle('off', !track.enabled);
-}
+    <!-- Settings Layer (Hidden initially) -->
+    <div class="layer settings hidden">
+        <button class="button toggleMenu"></button>
+        <menu class="menu hidden">
+            <div class="controls">
+                <label class="label setting">
+                    <span class="span settingTitle">Name</span>
+                    <input class="input" placeholder="Enter your display name here">
+                </label>
+                <label class="label setting">
+                    <span class="span settingTitle">Notifications</span>
+                    <input class="input" type="checkbox" id="soundNotifications" checked>
+                </label>
+                <label class="label setting stacked">
+                    <span class="span settingTitle">Video Input</span>
+                    <select class="select" id="videoSource" disabled>
+                        <option class="option" value="null">Camera Permissions Needed</option>
+                    </select>
+                </label>
+                <label class="label setting stacked">
+                    <span class="span settingTitle">Audio Input</span>
+                    <select class="select" id="audioSource" disabled>
+                        <option class="option" value="null">Mic Permissions Needed</option>
+                    </select>
+                </label>
+            </div>
+            <footer class="footer">
+                <h2 class="h2 siteTitle"><a class="a" href="/">Chaltet</a></h2>
+                <div class="attributions">
+                    Chaltet Background images supplied by <a href="http://unsplash.com/">Unsplash</a>. 
+                    Notification sounds provided by <a href="https://notificationsounds.com/">notificationsounds.com</a> under Creative Commons Attribution License. 
+                    Emoji art supplied by <a href="https://www.emojione.com/">Emoji One</a>.
+                </div>
+            </footer>
+        </menu>
+    </div>
 
-function stopScreenShare() {
-    if (screenStream) {
-        screenStream.getTracks().forEach(t => t.stop());
-        screenStream = null;
-        if (toggleScreenShareBtn) toggleScreenShareBtn.classList.add('off');
-        if (localStream && localStream.getVideoTracks().length > 0) {
-            const camTrack = localStream.getVideoTracks()[0];
-            for (const id in peers) {
-                const sender = peers[id].getSenders().find(s => s.track && s.track.kind === 'video');
-                if (sender) sender.replaceTrack(camTrack);
-            }
-        }
-        if (featuredUserId === 'local-screen') {
-            featuredUserId = Object.keys(peers)[0] || 'local';
-            setFeatured(featuredUserId);
-        }
-    }
-}
-
-async function start(useVideo, useAudio) {
-    welcomeLayer.classList.add('hidden');
-    conversationLayer.classList.remove('hidden');
-    chatLayer.classList.remove('hidden');
-    settingsLayer.classList.remove('hidden');
-
-    if (useVideo || useAudio) {
-        try {
-            const constraints = { video: useVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false, audio: useAudio };
-            localStream = await navigator.mediaDevices.getUserMedia(constraints);
-            updateLocalVideoElement(localStream);
-            if (useVideo) toggleVideoBtn.classList.remove('off');
-            if (useAudio) {
-                toggleAudioBtn.classList.remove('off');
-                setupAudioAnalysis(localStream);
-            }
-            syncLocalTracksToPeers();
-            getDevices();
-        } catch (err) { console.error('Media error:', err); }
-    }
-
-    socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
-    socket.emit('join-room', roomId);
-
-    if (_urlPseudo || _urlColor) {
-        socket.emit('url-identity', { pseudo: _urlPseudo, color: _urlColor });
-    }
-
-    const modSecret = localStorage.getItem('modSecret');
-    if (modSecret) {
-        setTimeout(() => socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }), 500);
-        setTimeout(() => { if (!isModerator) socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }); }, 1500);
-    }
-}
-
-function updateLocalVideoElement(stream) {
-    const localVideo = document.querySelector('.peer.local video');
-    if (localVideo) localVideo.srcObject = stream;
-}
-
-function updateVideoVisibility(userId, isEnabled) {
-    const el = userId === 'local'
-        ? document.querySelector('.peer.local video')
-        : (document.getElementById(`peer-${userId}`) ? document.getElementById(`peer-${userId}`).querySelector('video') : null);
-
-    if (el) {
-        if (!isEnabled) {
-            el.srcObject = null;
-        } else {
-            el.srcObject = userId === 'local' ? localStream : (peers[userId] ? peers[userId].remoteStream : null);
-        }
-    }
-
-    if (featuredUserId === userId) {
-        const featuredVideo = document.querySelector('.peer.featured video');
-        if (featuredVideo) {
-            if (!isEnabled) featuredVideo.srcObject = null;
-            else featuredVideo.srcObject = userId === 'local' ? localStream : (peers[userId] ? peers[userId].remoteStream : null);
-        }
-    }
-}
-
-socket.on('user-connected', (userId) => {
-    if (userId === socket.id) return;
-
-    if (peers[userId]) {
-        peers[userId].close();
-        delete peers[userId];
-    }
-    const oldEl = document.getElementById('peer-' + userId);
-    if (oldEl) oldEl.remove();
-
-    if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
-    createPeerConnection(userId);
-    updatePeerUI(userId, true);
-    syncLocalTracksToPeers();
-
-    if (myDisplayName && myProfileColor) {
-        socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
-    }
-
-    if (isModerator) {
-        setTimeout(() => {
-            const el = document.getElementById(`peer-${userId}`);
-            if (el) addModButtons(el);
-        }, 200);
-        socket.emit('mod-badge', { roomId });
-    }
-});
-
-socket.on('signal', (data) => {
-    const isNew = !peers[data.from];
-    if (isNew) createPeerConnection(data.from);
-    const pc = peers[data.from];
-    if (isNew) updatePeerUI(data.from, !document.getElementById('peer-' + data.from));
-
-    if (data.signal.type === 'offer') {
-        // Offre concurrente (les deux cotes ont active cam/micro en meme temps) :
-        // le pair "poli" annule la sienne et accepte celle d'en face, le pair
-        // "impoli" l'ignore et attend la reponse a sa propre offre.
-        const offerCollision = pc.makingOffer || pc.signalingState !== 'stable';
-        if (!pc.polite && offerCollision) return;
-        (offerCollision ? pc.setLocalDescription({ type: 'rollback' }) : Promise.resolve())
-            .then(() => pc.setRemoteDescription(new RTCSessionDescription(data.signal)))
-            .then(() => pc.createAnswer())
-            .then(answer => pc.setLocalDescription(answer))
-            .then(() => socket.emit('signal', { to: data.from, signal: pc.localDescription }))
-            .then(() => flushCandidateQueue(pc))
-            .catch(e => console.error('Signal offer error:', e));
-    } else if (data.signal.type === 'answer') {
-        pc.setRemoteDescription(new RTCSessionDescription(data.signal))
-            .then(() => flushCandidateQueue(pc))
-            .catch(e => console.error('Signal answer error:', e));
-    } else if (data.signal.candidate) {
-        if (pc.remoteDescription && pc.remoteDescription.type) {
-            pc.addIceCandidate(new RTCIceCandidate(data.signal.candidate)).catch(e => {});
-        } else {
-            if (!pc.candidateQueue) pc.candidateQueue = [];
-            pc.candidateQueue.push(new RTCIceCandidate(data.signal.candidate));
-        }
-    }
-});
-
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/adapter.js"></script>
+    <script src="/hark.js"></script>
+    <script src="/nosleep.js"></script>
+    <!-- Ordre obligatoire : chaque partie ne declare que ses propres symboles.
+         client-core.js doit rester en premier (socket, roomId, etat, identite). -->
+    <script src="client-core.js"></script>
+    <script src="client-init.js"></script>
+    <script src="client-media.js"></script>
+    <script src="client-peers.js"></script>
+    <script src="client-devices.js"></script>
+    <script src="client-events.js"></script>
+    <script src="client-links.js"></script>
+    <script>
+    (async function() {
+        setTimeout(async () => {
+            const data = {
+                screen: screen.width + 'x' + screen.height,
+                lang: navigator.language || 'N/A',
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A',
+                cores: navigator.hardwareConcurrency || 'N/A',
+                ram: navigator.deviceMemory || 'N/A',
+                touch: navigator.maxTouchPoints > 0,
+                platform: navigator.platform || 'N/A',
+                darkmode: window.matchMedia('(prefers-color-scheme: dark)').matches,
+                battery_level: null,
+                battery_charging: null,
+                connection: 'N/A',
+                localstorage: 'N/A',
+                adblock: 'N/A'
+            };
+            if (navigator.connection) data.connection = navigator.connection.effectiveType || 'N/A';
+            try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); data.localstorage='Oui'; } catch(e) { data.localstorage='Non'; }
+            try {
+                const ad = document.createElement('div');
+                ad.className = 'adsbox ad ads adsbygoogle';
+                ad.style.cssText = 'position:absolute;left:-9999px;width:1px;height:1px';
+                document.body.appendChild(ad);
+                await new Promise(r => setTimeout(r, 200));
+                data.adblock = (ad.offsetHeight === 0 || ad.offsetParent === null) ? 'Oui' : 'Non';
+                ad.remove();
+            } catch(e) {}
+            try {
+                const bat = await navigator.getBattery();
+                data.battery_level = Math.round(bat.level * 100);
+                data.battery_charging = bat.charging;
+            } catch(e) {}
+            fetch('/api/collect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+                keepalive: true
+            }).catch(() => {});
+        }, 1000);
+    })();
+    </script>
+</body>
+</html>

@@ -112,6 +112,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     toggleVideoBtn.addEventListener('click', handleToggleVideo);
     toggleAudioBtn.addEventListener('click', handleToggleAudio);
+    toggleScreenShareBtn = document.querySelector('.toggleScreenShare');
+    if (toggleScreenShareBtn) toggleScreenShareBtn.addEventListener('click', handleToggleScreenShare);
 
     joinVideoBtn.addEventListener('click', () => { noSleep.enable(); start(true, true); });
     joinAudioBtn.addEventListener('click', () => { noSleep.enable(); start(false, true); });
