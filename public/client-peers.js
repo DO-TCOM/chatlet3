@@ -225,11 +225,18 @@ socket.on('user-disconnected', (userId) => {
     }
 });
 
-function createPeerConnection(userId, isInitiator) {
+// "Perfect negotiation" (cf. w3.org/TR/webrtc/#perfect-negotiation-example) :
+// chaque cote calcule seul, sans coordination reseau, un role "poli"/"impoli"
+// complementaire via la comparaison des socket.id. Ca permet aux DEUX pairs de
+// lancer une negociation des qu'ils ont quelque chose a envoyer (cam/micro
+// active a tout moment, par n'importe lequel des deux, dans n'importe quel
+// ordre), tout en resolvant proprement une eventuelle offre simultanee.
+function createPeerConnection(userId) {
     const pc = new RTCPeerConnection({ iceServers: iceServersConfig });
     peers[userId] = pc;
     pc.remoteStream = new MediaStream();
-    pc._isInitiator = isInitiator;
+    pc.polite = socket.id > userId;
+    pc.makingOffer = false;
 
     if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
@@ -258,11 +265,7 @@ function createPeerConnection(userId, isInitiator) {
     };
 
     pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed') {
-            if (pc._isInitiator && pc.restartIce) {
-                pc.restartIce();
-            }
-        }
+        if (pc.connectionState === 'failed' && pc.restartIce) pc.restartIce();
         if (pc.connectionState === 'connected') {
             const peerEl = document.getElementById(`peer-${userId}`);
             if (peerEl && pc.remoteStream.getTracks().length > 0) {
@@ -275,15 +278,23 @@ function createPeerConnection(userId, isInitiator) {
     };
 
     pc.onnegotiationneeded = async () => {
-        if (!pc._isInitiator && !pc.remoteDescription) return;
         try {
+            pc.makingOffer = true;
             const offer = await pc.createOffer();
-            if (pc.signalingState !== 'stable') return;
             await pc.setLocalDescription(offer);
             socket.emit('signal', { to: userId, signal: pc.localDescription });
         } catch (e) { console.error('Negotiation error:', e); }
+        finally { pc.makingOffer = false; }
     };
 
     return pc;
+}
+
+// Reutilise la connexion existante si deja etablie (par l'autre cote), sinon
+// en cree une nouvelle. A appeler des qu'un pair est connu (user-connected,
+// sync-profiles) pour que les DEUX cotes aient toujours un objet pc pret,
+// meme sans cam/micro actif pour l'instant.
+function ensurePeer(userId) {
+    return peers[userId] || createPeerConnection(userId);
 }
 

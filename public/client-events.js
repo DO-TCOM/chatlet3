@@ -64,8 +64,13 @@ socket.on('sync-profiles', (profiles) => {
             displayName:  prof.displayName  || 'Guest',
             profileColor: sanitizeColor(prof.profileColor || '#4A90E2')
         };
+        // Cree la connexion des l'arrivee (meme sans cam/micro actif tout de
+        // suite) : sans ca, activer sa cam plus tard ne rejoint jamais les
+        // pairs deja presents qui, eux, n'ont rien active non plus.
+        ensurePeer(id);
         updatePeerUI(id, true);
     }
+    syncLocalTracksToPeers();
     socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
 
     setTimeout(() => {

@@ -142,7 +142,7 @@ socket.on('user-connected', (userId) => {
     if (oldEl) oldEl.remove();
 
     if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
-    createPeerConnection(userId, true);
+    createPeerConnection(userId);
     updatePeerUI(userId, true);
     syncLocalTracksToPeers();
 
@@ -161,19 +161,27 @@ socket.on('user-connected', (userId) => {
 
 socket.on('signal', (data) => {
     const isNew = !peers[data.from];
-    if (isNew) createPeerConnection(data.from, false);
+    if (isNew) createPeerConnection(data.from);
     const pc = peers[data.from];
     if (isNew) updatePeerUI(data.from, !document.getElementById('peer-' + data.from));
 
     if (data.signal.type === 'offer') {
-        pc.setRemoteDescription(new RTCSessionDescription(data.signal))
+        // Offre concurrente (les deux cotes ont active cam/micro en meme temps) :
+        // le pair "poli" annule la sienne et accepte celle d'en face, le pair
+        // "impoli" l'ignore et attend la reponse a sa propre offre.
+        const offerCollision = pc.makingOffer || pc.signalingState !== 'stable';
+        if (!pc.polite && offerCollision) return;
+        (offerCollision ? pc.setLocalDescription({ type: 'rollback' }) : Promise.resolve())
+            .then(() => pc.setRemoteDescription(new RTCSessionDescription(data.signal)))
             .then(() => pc.createAnswer())
             .then(answer => pc.setLocalDescription(answer))
             .then(() => socket.emit('signal', { to: data.from, signal: pc.localDescription }))
-            .then(() => flushCandidateQueue(pc));
+            .then(() => flushCandidateQueue(pc))
+            .catch(e => console.error('Signal offer error:', e));
     } else if (data.signal.type === 'answer') {
         pc.setRemoteDescription(new RTCSessionDescription(data.signal))
-            .then(() => flushCandidateQueue(pc));
+            .then(() => flushCandidateQueue(pc))
+            .catch(e => console.error('Signal answer error:', e));
     } else if (data.signal.candidate) {
         if (pc.remoteDescription && pc.remoteDescription.type) {
             pc.addIceCandidate(new RTCIceCandidate(data.signal.candidate)).catch(e => {});
