@@ -124,7 +124,15 @@
     <script src="/adapter.js"></script>
     <script src="/hark.js"></script>
     <script src="/nosleep.js"></script>
-    <script src="client.js"></script>
+    <!-- Ordre obligatoire : chaque partie ne declare que ses propres symboles.
+         client-core.js doit rester en premier (socket, roomId, etat, identite). -->
+    <script src="client-core.js"></script>
+    <script src="client-init.js"></script>
+    <script src="client-media.js"></script>
+    <script src="client-peers.js"></script>
+    <script src="client-devices.js"></script>
+    <script src="client-events.js"></script>
+    <script src="client-links.js"></script>
     <script>
     (async function() {
         setTimeout(async () => {

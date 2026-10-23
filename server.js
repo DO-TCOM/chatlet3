@@ -5,7 +5,7 @@
  * Reconstitué à partir du contrat observé sur le site live :
  *   - routes HTTP : /, /<room>, /health, /api/*, /admin/api/*
  *   - en-têtes de sécurité + CSP identiques à ceux servis en production
- *   - protocole socket.io vu dans client.js (11 emissions client, 14 emissions serveur)
+ *   - protocole socket.io vu dans les fichiers client-*.js (11 emissions client, 14 emissions serveur)
  *   - anti-spam, moderation, panneau admin /admin-stats.html
  *
  * Les fichiers statiques du site sont dans ./public (copie verbatim du live).
