@@ -734,11 +734,13 @@ io.on('connection', (socket) => {
     socket.to(room).emit('user-connected', socket.id);
 
     const profiles = await store.hGetAll(HASH_PROFILES);
+    const live = io.sockets.adapter.rooms.get(room) || new Set();
     const mine = {};
     for (const [key, raw] of Object.entries(profiles)) {
       if (!key.startsWith(room + ':')) continue;
       const id = key.slice(room.length + 1);
       if (id === socket.id) continue;
+      if (!live.has(id)) { store.hDel(HASH_PROFILES, key).catch(() => {}); continue; }
       let p = raw;
       try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { /* ignore */ }
       mine[id] = { displayName: p.displayName || 'Guest', profileColor: p.profileColor || '#4A90E2' };
@@ -767,6 +769,24 @@ io.on('connection', (socket) => {
     const uuid = cleanText(data && data.uuid, 64) || socket.id;
     await store.hSet(HASH_PROFILES, `${room}:${socket.id}`, { displayName, profileColor, uuid });
     await store.hSet(HASH_PROFILES, `uuid:${uuid}`, { pseudo: displayName, color: profileColor });
+
+    // Une seule session par uuid et par salle : evince l'ancien socket (onglet
+    // rafraichi / reconnexion) qui sinon reste affiche en double jusqu'au timeout.
+    if (data && data.uuid) {
+      const all = await store.hGetAll(HASH_PROFILES);
+      for (const [key, raw] of Object.entries(all)) {
+        if (!key.startsWith(room + ':')) continue;
+        const oldId = key.slice(room.length + 1);
+        if (oldId === socket.id) continue;
+        let p = raw;
+        try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { continue; }
+        if (p && p.uuid === uuid) {
+          await store.hDel(HASH_PROFILES, key);
+          socket.to(room).emit('user-disconnected', oldId);
+          io.sockets.sockets.get(oldId)?.disconnect(true);
+        }
+      }
+    }
 
     socket.to(room).emit('profile-update', { id: socket.id, displayName, profileColor });
   });
@@ -804,6 +824,8 @@ io.on('connection', (socket) => {
   socket.on('signal', (data) => {
     const to = cleanText(data && data.to, 64);
     if (!to || !data.signal) return;
+    const room = socket.data.room;
+    if (!room || !io.sockets.adapter.rooms.get(room)?.has(to)) return;
     io.to(to).emit('signal', { from: socket.id, signal: data.signal });
   });
 
@@ -876,6 +898,10 @@ io.on('connection', (socket) => {
 
 (async () => {
   redisClient = await initRedis();
+  try {
+    const all = await store.hGetAll(HASH_PROFILES);
+    for (const k of Object.keys(all)) if (!k.startsWith('uuid:')) await store.hDel(HASH_PROFILES, k);
+  } catch (e) { /* ignore */ }
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Chaltet sur http://0.0.0.0:${PORT} (${redisClient ? 'redis' : 'fichiers locaux'})`);
   });
