@@ -15,18 +15,20 @@ function syncLocalTracksToPeers() {
 async function handleToggleVideo() {
     if (!localStream) localStream = new MediaStream();
 
+    let justCreated = false;
     if (localStream.getVideoTracks().length === 0) {
         try {
             const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } });
             const track = newStream.getVideoTracks()[0];
             localStream.addTrack(track);
             syncLocalTracksToPeers();
+            justCreated = true;
         } catch (err) { console.error('Media error:', err); return; }
     }
 
     updateLocalVideoElement(localStream);
     const track = localStream.getVideoTracks()[0];
-    track.enabled = !track.enabled;
+    if (!justCreated) track.enabled = !track.enabled;
     toggleVideoBtn.classList.toggle('off', !track.enabled);
     updateVideoVisibility('local', track.enabled);
     socket.emit('video-status', { roomId, enabled: track.enabled });
@@ -35,6 +37,7 @@ async function handleToggleVideo() {
 async function handleToggleAudio() {
     if (!localStream) localStream = new MediaStream();
 
+    let justCreated = false;
     if (localStream.getAudioTracks().length === 0) {
         try {
             const newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -42,11 +45,12 @@ async function handleToggleAudio() {
             localStream.addTrack(track);
             setupAudioAnalysis(localStream);
             syncLocalTracksToPeers();
+            justCreated = true;
         } catch (err) { console.error('Media error:', err); return; }
     }
 
     const track = localStream.getAudioTracks()[0];
-    track.enabled = !track.enabled;
+    if (!justCreated) track.enabled = !track.enabled;
     toggleAudioBtn.classList.toggle('off', !track.enabled);
 }
 
