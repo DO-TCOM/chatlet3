@@ -152,6 +152,8 @@ const HASH_PROFILES = 'socket_profiles';
 const HASH_NOTES = 'notes';
 const HASH_BLACKLIST = 'blacklist';
 const HASH_EXTRAS = 'extras';
+const HASH_AUTH_ATTEMPTS = 'auth_attempts';
+const HASH_SPAM_STATE = 'spam_state';
 const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
 // Nombre maximum de lignes de logs conservees (voir store.lTrimLast).
@@ -229,31 +231,36 @@ function logLine(ip, browser, room) {
 
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 10;
-const authAttempts = new Map();
 
-function authRateLimit(ip) {
+// Stocke dans Redis/fichier (plus une Map en memoire) : un redemarrage de
+// l'instance (Render free tier se met en veille) ne doit pas remettre a
+// zero le compteur de tentatives de connexion admin/mod.
+async function authRateLimit(ip) {
   const now = Date.now();
-  let st = authAttempts.get(ip);
-  if (!st || now >= st.resetAt) {
-    st = { count: 0, resetAt: now + AUTH_WINDOW_MS };
-    authAttempts.set(ip, st);
-  }
+  const all = await store.hGetAll(HASH_AUTH_ATTEMPTS);
+  let st = null;
+  try { st = all[ip] ? JSON.parse(all[ip]) : null; } catch (e) { st = null; }
+  if (!st || now >= st.resetAt) st = { count: 0, resetAt: now + AUTH_WINDOW_MS };
   st.count += 1;
+  await store.hSet(HASH_AUTH_ATTEMPTS, ip, st);
   return {
     blocked: st.count > AUTH_MAX_ATTEMPTS,
     retryAfter: Math.ceil((st.resetAt - now) / 1000),
   };
 }
-function authRateClear(ip) {
-  authAttempts.delete(ip);
+async function authRateClear(ip) {
+  await store.hDel(HASH_AUTH_ATTEMPTS, ip);
 }
 
-/* Purge periodique : evite que la Map croisse sans borne, un IP etant
+/* Purge periodique : evite que le hash croisse sans borne, un IP etant
    une cle librement falsifiable via X-Forwarded-For.                  */
-setInterval(() => {
+setInterval(async () => {
   const now = Date.now();
-  for (const [ip, st] of authAttempts) {
-    if (now >= st.resetAt) authAttempts.delete(ip);
+  const all = await store.hGetAll(HASH_AUTH_ATTEMPTS);
+  for (const [ip, raw] of Object.entries(all)) {
+    let st = null;
+    try { st = JSON.parse(raw); } catch (e) { st = null; }
+    if (!st || now >= st.resetAt) await store.hDel(HASH_AUTH_ATTEMPTS, ip);
   }
 }, AUTH_WINDOW_MS).unref();
 
@@ -459,9 +466,22 @@ async function isValidAdminToken(token) {
   return false;
 }
 
+/* Purge periodique : sans ca, un token jamais relu apres son expiration
+   (connexion admin abandonnee) reste indefiniment dans le hash.        */
+const ADMIN_TOKEN_PURGE_MS = 60 * 60 * 1000;
+setInterval(async () => {
+  const now = Date.now();
+  const all = await store.hGetAll(HASH_ADMIN_TOKENS);
+  for (const [token, raw] of Object.entries(all)) {
+    let rec = null;
+    try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { /* entree corrompue */ }
+    if (!rec || !(rec.exp > now)) await store.hDel(HASH_ADMIN_TOKENS, token);
+  }
+}, ADMIN_TOKEN_PURGE_MS).unref();
+
 app.post('/admin/api/login', async (req, res) => {
   const ip = clientIp(req);
-  const limit = authRateLimit(ip);
+  const limit = await authRateLimit(ip);
   if (limit.blocked) {
     return res.status(429).json({ ok: false, message: `Trop de tentatives. Reessaye dans ${limit.retryAfter}s.` });
   }
@@ -471,7 +491,7 @@ app.post('/admin/api/login', async (req, res) => {
   }
   const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
   if (!ok) return res.status(401).json({ ok: false, message: 'Mot de passe incorrect' });
-  authRateClear(ip);
+  await authRateClear(ip);
   res.json({ ok: true, token: await issueAdminToken() });
 });
 
@@ -616,16 +636,24 @@ const io = new Server(server, {
 });
 
 const MUTE_STEPS = [15e3, 60e3, 600e3, 3600e3, 86400e3];
-const spamState = new Map();
+// Mute impose par un moderateur (mod-mute) : empeche reellement l'envoi de
+// messages cote serveur, contrairement a l'ancien systeme purement visuel.
+const mutedSockets = new Set();
 
-function spamCheck(ip, message) {
+// Stocke dans Redis/fichier (plus une Map en memoire) : un redemarrage de
+// l'instance (Render free tier se met en veille) ne doit pas remettre a
+// zero le niveau de mute progressif anti-spam par IP.
+async function spamCheck(ip, message) {
   const now = Date.now();
-  const st = spamState.get(ip) || { window: [], longs: [], muteUntil: 0, level: 0, lastSeen: 0 };
+  const all = await store.hGetAll(HASH_SPAM_STATE);
+  let st = null;
+  try { st = all[ip] ? JSON.parse(all[ip]) : null; } catch (e) { st = null; }
+  if (!st) st = { window: [], longs: [], muteUntil: 0, level: 0, lastSeen: 0 };
   st.lastSeen = now;
-  spamState.set(ip, st);
 
   if (st.muteUntil > now) {
     const left = Math.ceil((st.muteUntil - now) / 1000);
+    await store.hSet(HASH_SPAM_STATE, ip, st);
     return { blocked: true, muted: true, muteExpired: false, message: `Tu es mute. Reessaye dans ${left}s.` };
   }
   // Un mute existait et vient d'expirer : le client doit etre prevenu pour
@@ -638,36 +666,44 @@ function spamCheck(ip, message) {
   if (st.window.length >= 3) {
     st.level = Math.min(st.level + 1, MUTE_STEPS.length - 1);
     st.muteUntil = now + MUTE_STEPS[st.level];
+    await store.hSet(HASH_SPAM_STATE, ip, st);
     return { blocked: true, muted: true, muteExpired: false, message: 'Trop de messages. Tu es mute temporairement.' };
   }
   if (String(message || '').length > 100) {
     if (st.longs.length >= 2) {
       st.level = Math.min(st.level + 1, MUTE_STEPS.length - 1);
       st.muteUntil = now + MUTE_STEPS[st.level];
+      await store.hSet(HASH_SPAM_STATE, ip, st);
       return { blocked: true, muted: true, muteExpired: false, message: 'Trop de messages longs. Tu es mute temporairement.' };
     }
     st.longs.push(now);
   }
   st.window.push(now);
+  await store.hSet(HASH_SPAM_STATE, ip, st);
   // Note : le niveau d'escalade n'est pas remis a zero (escalade stricte).
   return { blocked: false, muted: false, muteExpired, message: '' };
 }
 
-/* spamState est indexe par IP, une cle librement falsifiable : la Map doit
-   etre purgee periodiquement, comme authAttempts plus haut.               */
+/* HASH_SPAM_STATE est indexe par IP, une cle librement falsifiable : il doit
+   etre purge periodiquement, comme HASH_AUTH_ATTEMPTS plus haut.          */
 const SPAM_PURGE_MS = 10 * 60 * 1000;
 const SPAM_MAX_ENTRIES = 20000;
-setInterval(() => {
+setInterval(async () => {
   const now = Date.now();
-  for (const [ip, st] of spamState) {
-    const idle = now - (st.lastSeen || 0);
-    if (st.muteUntil <= now && idle > 60 * 60 * 1000) spamState.delete(ip);
+  const all = await store.hGetAll(HASH_SPAM_STATE);
+  const entries = Object.entries(all);
+  for (const [ip, raw] of entries) {
+    let st = null;
+    try { st = JSON.parse(raw); } catch (e) { /* entree corrompue */ }
+    const idle = now - ((st && st.lastSeen) || 0);
+    if (!st || (st.muteUntil <= now && idle > 60 * 60 * 1000)) await store.hDel(HASH_SPAM_STATE, ip);
   }
-  // Filet de securite : si la Map explose malgre la purge, on tronque.
-  if (spamState.size > SPAM_MAX_ENTRIES) {
-    for (const ip of spamState.keys()) {
-      if (spamState.size <= SPAM_MAX_ENTRIES) break;
-      spamState.delete(ip);
+  // Filet de securite : si le hash explose malgre la purge, on tronque les
+  // plus anciennes entrees restantes.
+  if (entries.length > SPAM_MAX_ENTRIES) {
+    const remaining = Object.keys(await store.hGetAll(HASH_SPAM_STATE));
+    for (let i = 0; i < remaining.length - SPAM_MAX_ENTRIES; i++) {
+      await store.hDel(HASH_SPAM_STATE, remaining[i]);
     }
   }
 }, SPAM_PURGE_MS).unref();
@@ -761,6 +797,12 @@ io.on('connection', (socket) => {
   socket.on('profile-update', async (data) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
     if (!room) return;
+    const access = await checkRoomAccess(ip);
+    if (!access.allowed) {
+      socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect });
+      socket.disconnect(true);
+      return;
+    }
     socket.data.room = room;
     const displayName = cleanText(data && data.displayName, 50) || 'Guest';
     const profileColor = sanitizeColor(data && data.profileColor);
@@ -797,24 +839,39 @@ io.on('connection', (socket) => {
     if (pseudo) socket.data.profile = { displayName: pseudo, profileColor: color };
   });
 
-  socket.on('chat-message', (data) => {
+  socket.on('chat-message', async (data) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
     if (!room) return;
+    const access = await checkRoomAccess(ip);
+    if (!access.allowed) {
+      socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect });
+      socket.disconnect(true);
+      return;
+    }
+    if (mutedSockets.has(socket.id)) {
+      socket.emit('spam-warning', { blocked: true, muted: true, muteExpired: false, message: 'Tu es mute par un moderateur.' });
+      return;
+    }
+
     const message = cleanText(data && data.message, 200);
     if (!message) return;
 
-    const check = spamCheck(ip, message);
+    const check = await spamCheck(ip, message);
     if (check.blocked) {
       socket.emit('spam-warning', check);
       return;
     }
     // Le mute automatique vient d'expirer : le client re-active son champ de saisie.
     if (check.muteExpired) socket.emit('spam-unmuted');
+    // Le pseudo/couleur viennent du profil connu du serveur (profile-update),
+    // pas du payload client : sinon un visiteur peut usurper un autre pseudo
+    // a chaque message sans jamais changer son profil reel.
+    const profile = (socket.data && socket.data.profile) || {};
     const payload = {
       id: socket.id,
-      userName: cleanText(data && data.userName, 50) || 'Guest',
+      userName: profile.displayName || 'Guest',
       message,
-      color: sanitizeColor(data && data.color),
+      color: sanitizeColor(profile.profileColor),
       ts: Date.now(),
     };
     socket.to(room).emit('chat-message', payload);
@@ -829,9 +886,10 @@ io.on('connection', (socket) => {
     io.to(to).emit('signal', { from: socket.id, signal: data.signal });
   });
 
-  socket.on('video-status', (data) => {
+  socket.on('video-status', async (data) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
     if (!room) return;
+    if (!(await checkRoomAccess(ip)).allowed) return;
     socket.to(room).emit('video-status', { id: socket.id, enabled: data.enabled === true });
   });
 
@@ -841,23 +899,24 @@ io.on('connection', (socket) => {
     socket.to(room).emit('peer-speaking', { id: socket.id, status: data && data.status === true });
   });
 
-  socket.on('mod-auth', (data) => {
-    const limit = authRateLimit(ip);
+  socket.on('mod-auth', async (data) => {
+    const limit = await authRateLimit(ip);
     if (limit.blocked) {
       socket.emit('mod-status', false);
       return;
     }
     const password = cleanText(data && data.password, 128);
     const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
-    if (ok) authRateClear(ip);
+    if (ok) await authRateClear(ip);
     socket.data.isMod = ok;
     socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
     socket.emit('mod-status', ok);
   });
 
-  socket.on('mod-badge', (data) => {
+  socket.on('mod-badge', async (data) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
     if (!room || !isMod(socket)) return;
+    if (!(await checkRoomAccess(ip)).allowed) return;
     socket.to(room).emit('mod-badge', { id: socket.id });
   });
 
@@ -869,6 +928,7 @@ io.on('connection', (socket) => {
 
     if (event === 'mod-mute' || event === 'mod-unmute') {
       const muted = event === 'mod-mute';
+      if (muted) mutedSockets.add(id); else mutedSockets.delete(id);
       io.to(id).emit('mod-action', { type: muted ? 'muted' : 'unmuted', by });
       // L'ack revient au moderateur (celui qui a clique), pas a la cible :
       // c'est lui qui tient mutedPeers pour basculer le bouton Mute/Unmute.
@@ -879,7 +939,16 @@ io.on('connection', (socket) => {
       const kind = event === 'mod-kick' ? 'kicked' : event === 'mod-kick-temp' ? 'kicked-temp' : 'banned';
       io.to(id).emit('mod-action', { type: kind, by });
       const target = await io.in(id).fetchSockets();
-      for (const s of target) s.disconnect(true);
+      if (event === 'mod-ban') {
+        // Persiste le ban par IP (Redis/fichier) : sans ca, la cible pouvait
+        // se reconnecter immediatement apres la simple deconnexion socket.
+        for (const s of target) {
+          const targetIp = clientIp(s.request);
+          if (targetIp) await store.hSet(HASH_BLACKLIST, targetIp, { blocked: true, whitelist: false });
+        }
+        cacheBlacklist.exp = 0;
+      }
+      for (const s of target) { mutedSockets.delete(s.id); s.disconnect(true); }
     }
   };
   socket.on('mod-mute', modAction('mod-mute'));
@@ -889,6 +958,7 @@ io.on('connection', (socket) => {
   socket.on('mod-ban', modAction('mod-ban'));
 
   socket.on('disconnect', async () => {
+    mutedSockets.delete(socket.id);
     const room = socket.data.room;
     if (!room) return;
     socket.to(room).emit('user-disconnected', socket.id);
