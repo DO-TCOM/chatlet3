@@ -90,6 +90,29 @@ socket.on('room-blocked', (data) => {
         window.location.href = redirect;
         return;
     }
+    // Kick temporaire (30s) : message clair avec decompte, au lieu du « BAN »
+    // generique qui envoyait la victime sur Google pour un simple kick court.
+    if (reason === 'tempbanned') {
+        const until = Number((data && data.until) || 0);
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;font-family:sans-serif;';
+        const msg = document.createElement('div');
+        msg.style.cssText = 'color:#ff8800;font-size:2.2rem;font-weight:bold;letter-spacing:0.08em;margin-bottom:.5rem;';
+        msg.textContent = 'KICK TEMPORAIRE';
+        const sub = document.createElement('div');
+        sub.style.cssText = 'color:#ccc;font-size:1.2rem;';
+        const tick = () => {
+            const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+            sub.textContent = left > 0 ? `Reviens dans ${left}s…` : 'Rechargement…';
+            if (left <= 0) { clearInterval(iv); window.location.reload(); }
+        };
+        overlay.appendChild(msg);
+        overlay.appendChild(sub);
+        document.body.appendChild(overlay);
+        tick();
+        const iv = setInterval(tick, 500);
+        return;
+    }
     showModOverlay(reason === 'whitelist' ? 'ACCES RESTREINT' : 'BAN', () => {
         window.location.href = 'https://www.google.com';
     });
