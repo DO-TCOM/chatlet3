@@ -97,6 +97,12 @@ const store = {
     if (!memory.hashes.has(hash)) memory.hashes.set(hash, readFile('hash', hash, {}));
     return memory.hashes.get(hash) || {};
   },
+  async hGet(hash, key) {
+    if (redisClient) return await redisClient.hGet(hash, key);
+    if (!memory.hashes.has(hash)) memory.hashes.set(hash, readFile('hash', hash, {}));
+    const h = memory.hashes.get(hash) || {};
+    return h[key] !== undefined ? h[key] : null;
+  },
   async hSet(hash, key, value) {
     const s = typeof value === 'string' ? value : JSON.stringify(value);
     if (redisClient) return await redisClient.hSet(hash, key, s);
@@ -154,6 +160,9 @@ const HASH_BLACKLIST = 'blacklist';
 const HASH_EXTRAS = 'extras';
 const HASH_AUTH_ATTEMPTS = 'auth_attempts';
 const HASH_SPAM_STATE = 'spam_state';
+// Suivi ip -> pseudos/salons utilises, pour les colonnes « Pseudo(s) » et
+// « Room(s) » du panneau admin (les logs ne contiennent ni pseudo ni salon).
+const HASH_IP_VISITS = 'ip_visits';
 const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
 // Nombre maximum de lignes de logs conservees (voir store.lTrimLast).
@@ -223,6 +232,56 @@ function logLine(ip, browser, room) {
   const letter = 'Z';
   return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'} `;
 }
+
+/* ─────────── Historique IP → pseudos / salons (panneau admin) ─────────── */
+/* Les logs HTTP ne contiennent que l'IP et le chemin visite : jamais le     */
+/* pseudo choisi dans la room. Chaque profile-update (une par page de room)  */
+/* enregistre ici l'IP, le pseudo et le salon vus — c'est la source des      */
+/* colonnes « Pseudo(s) » et « Room(s) » de admin-stats.html.                */
+const VISIT_PURGE_MS = 60 * 60 * 1000;        // purge horaire
+const VISIT_MAX_IDLE = 30 * 24 * 60 * 60 * 1000; // 30 jours d'inactivite
+const VISIT_MAX_IPS = 5000;                   // filet de securite taille
+async function recordVisit(ip, pseudo, room) {
+  if (!ip) return;
+  try {
+    const raw = await store.hGet(HASH_IP_VISITS, ip);
+    let v = null;
+    try { v = raw ? JSON.parse(raw) : null; } catch (e) { v = null; }
+    if (!v || typeof v !== 'object') v = { ps: {}, rm: {}, seen: 0 };
+    const now = Date.now();
+    if (pseudo) v.ps = { ...(v.ps || {}), [pseudo]: now };
+    if (room) v.rm = { ...(v.rm || {}), [room]: now };
+    v.seen = now;
+    // Borne la taille : ne garder que les entrees les plus recentes.
+    const trim = (o, max) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, max));
+    v.ps = trim(v.ps, 20);
+    v.rm = trim(v.rm, 30);
+    await store.hSet(HASH_IP_VISITS, ip, v);
+  } catch (e) { /* jamais bloquant */ }
+}
+
+/* Purge periodique : evite que le hash grossisse sans borne dans Upstash
+   (quota 64 Mo), meme logique que auth_attempts plus haut.                */
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const all = await store.hGetAll(HASH_IP_VISITS);
+    const entries = Object.entries(all);
+    for (const [ip, raw] of entries) {
+      let v = null;
+      try { v = JSON.parse(raw); } catch (e) { v = null; }
+      if (!v || typeof v !== 'object' || now - (v.seen || 0) > VISIT_MAX_IDLE) {
+        await store.hDel(HASH_IP_VISITS, ip);
+      }
+    }
+    const rest = Object.entries(await store.hGetAll(HASH_IP_VISITS));
+    if (rest.length > VISIT_MAX_IPS) {
+      const seenOf = (raw) => { try { return JSON.parse(raw).seen || 0; } catch (e) { return 0; } };
+      rest.sort((a, b) => seenOf(a[1]) - seenOf(b[1]));
+      for (const [ip] of rest.slice(0, rest.length - VISIT_MAX_IPS)) await store.hDel(HASH_IP_VISITS, ip);
+    }
+  } catch (e) { /* ignore */ }
+}, VISIT_PURGE_MS).unref();
 
 /* ─────────────────── Limiteur d'authentification ─────────────────── */
 /* Compte les tentatives de login admin et de mod-auth socket par IP.  */
@@ -525,10 +584,21 @@ app.post('/admin/api/data', async (req, res) => {
     if (all.size) merged.pseudos = Array.from(all).join(', ');
     extras[ipKey] = merged;
   }
+  // Suivi admin : ip -> pseudos + salons vus (source fiable cote serveur,
+  // alimentee par profile-update — voir recordVisit).
+  const rawVisits = await store.hGetAll(HASH_IP_VISITS);
+  const visits = {};
+  const byRecency = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  for (const [ip, raw] of Object.entries(rawVisits)) {
+    const v = parse(raw);
+    if (!v || typeof v !== 'object') continue;
+    visits[ip] = { pseudos: byRecency(v.ps), rooms: byRecency(v.rm), lastSeen: v.seen || 0 };
+  }
   res.json({
     ok: true,
     logs: logs.join('\n'),
     extras,
+    visits,
     notes: rawNotes,
     blacklist: Object.values(rawBl).map(parse),
     config: {
@@ -807,6 +877,8 @@ io.on('connection', (socket) => {
     const displayName = cleanText(data && data.displayName, 50) || 'Guest';
     const profileColor = sanitizeColor(data && data.profileColor);
     socket.data.profile = { displayName, profileColor };
+    // Alimente la table ip -> pseudos/salons du panneau admin.
+    recordVisit(ip, displayName, room);
 
     const uuid = cleanText(data && data.uuid, 64) || socket.id;
     await store.hSet(HASH_PROFILES, `${room}:${socket.id}`, { displayName, profileColor, uuid });
