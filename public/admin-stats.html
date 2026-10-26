@@ -277,6 +277,7 @@
                         <th>IP</th>
                         <th>Localisation</th>
                         <th>Pseudo(s)</th>
+                        <th>Room(s)</th>
                         <th>Dernière co.</th>
                         <th>Nav</th>
                         <th>VPN</th>
@@ -297,7 +298,7 @@
                     </tr>
                 </thead>
                 <tbody id="logsBody">
-                    <tr><td colspan="22" class="loading">Chargement...</td></tr>
+                    <tr><td colspan="23" class="loading">Chargement...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -486,6 +487,16 @@
             document.getElementById('logsTable').classList.toggle('show-extras', showExtras);
         }
 
+        /* Les lignes de logs contiennent tout chemin visite (/admin/api/...,
+           /profile-transfer, etc.) : seule la colonne Room(s) doit montrer de
+           vrais salons, pas les appels internes de l'admin ni les pages. */
+        function isRealRoom(r) {
+            if (!r || r === '/') return false;              // page d'accueil
+            if (/^(admin|api|socket\.io|health)\b/i.test(r.replace(/^\//, ''))) return false;
+            if (/\.[a-z0-9]{1,8}$/i.test(r)) return false;  // fichier statique
+            return true;
+        }
+
 
         function renderLogs() {
             if (!lastData) return;
@@ -525,7 +536,9 @@
                     const roomList = Array.from(g.rooms).join(' ');
                     const extra = data.extras[g.ip] || {};
                     const note = data.notes[g.ip] || '';
-                    const haystack = `${g.ip} ${g.city} ${g.country} ${g.letter} ${roomList} ${note} ${JSON.stringify(extra)}`.toLowerCase();
+                    const vis0 = (data.visits && data.visits[g.ip]) || {};
+                    const hayExtra = `${(vis0.pseudos || []).join(' ')} ${(vis0.rooms || []).join(' ')} ${JSON.stringify(extra)}`;
+                    const haystack = `${g.ip} ${g.city} ${g.country} ${g.letter} ${roomList} ${note} ${hayExtra}`.toLowerCase();
                     return haystack.includes(searchTerm);
                 })
                 .sort((a,b) => new Date(b.date) - new Date(a.date));
@@ -539,7 +552,14 @@
                 const extra = data.extras[g.ip] || {};
                 const note = data.notes[g.ip] || '';
                 const rowClass = rule.blocked ? 'blocked-row' : (rule.whitelist ? 'white-row' : '');
-                window._profileMap[g.ip] = { g, extra };
+                // Pseudos : suivi serveur (visits) en priorite, puis les anciens
+                // extras.pseudos le cas echeant. Salons : suivi serveur union
+                // salons lus dans les lignes de logs.
+                const vis = (data.visits && data.visits[g.ip]) || {};
+                const extraP = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : [];
+                const pseudoList = [...new Set([...(vis.pseudos || []), ...extraP])];
+                const roomList = [...new Set([...(vis.rooms || []), ...Array.from(g.rooms)])].filter(isRealRoom);
+                window._profileMap[g.ip] = { g, extra, vis };
                 const dotColor = safeColor(extra.url_color, '#888');
                 
                 return `<tr class="${rowClass}">
@@ -547,7 +567,8 @@
                     <td class="lettre-big profile-trigger" data-ip="${esc(g.ip)}" style='cursor:pointer;'>${esc(g.letter)}${g.count > 1 ? `<span class="count">${esc(g.count)}x</span>` : ''}</td>
                     <td class="ip-cell profile-trigger" data-ip="${esc(g.ip)}" style='cursor:pointer;text-decoration:underline;'>${esc(g.ip)}</td>
                     <td>${esc(g.city)}<br><small style="color:#888">${esc(g.country)}</small></td>
-                    <td class="pseudo">${(() => { const all = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : []; const last3 = all.slice(-3); const rest = all.length - 3; return last3.length ? last3.map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:4px;vertical-align:middle;'></span>${esc(p)}</div>`).join('') + (rest > 0 ? `<div style='color:#888;font-size:10px'>+${rest} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'; })()}</td>
+                    <td class="pseudo">${(() => { const last3 = pseudoList.slice(0, 3); const rest = pseudoList.length - 3; return last3.length ? last3.map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:4px;vertical-align:middle;'></span>${esc(p)}</div>`).join('') + (rest > 0 ? `<div style='color:#888;font-size:10px'>+${rest} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'; })()}</td>
+                    <td>${roomList.length ? roomList.slice(0, 3).map(r => `<div style="font-size:10px;white-space:nowrap;">🚪 ${esc(r === '/' ? '/' : '/' + r)}</div>`).join('') + (roomList.length > 3 ? `<div style="color:#888;font-size:10px">+${roomList.length - 3} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'}</td>
                     <td style="font-size:11px; white-space:nowrap;">${esc(g.date)}</td>
                     <td style="text-align:center">${esc(g.browser)}</td>
                     <td class="vpn-badge">${g.vpn ? '🔒' : ''}</td>
@@ -598,7 +619,7 @@
 
         let _currentProfile = {};
 
-        function openProfile(g, extra) {
+        function openProfile(g, extra, vis) {
             const modal = document.getElementById('profileModal');
             document.getElementById('modal-title').textContent = 'Profil — ' + g.letter + ' (' + g.ip + ')';
             
@@ -623,15 +644,16 @@
                 '<div class="modal-item"><label>' + esc(label) + '</label><span>' + esc(val) + '</span></div>'
             ).join('');
             
-            const pseudos = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : [];
+            const extraP = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : [];
+            const pseudos = [...new Set([...((vis && vis.pseudos) || []), ...extraP])];
             const pcolor = safeColor(extra.url_color, '');
             document.getElementById('modal-pseudos').innerHTML = pseudos.length
                 ? pseudos.map(p => '<span class="pseudo-tag" style="' + (pcolor ? 'background:' + pcolor + ';' : '') + '">' + esc(p) + '</span>').join('')
                 : '<span style="color:#aaa;font-size:12px">Aucun pseudo connu</span>';
             
-            const rooms = Array.from(g.rooms);
+            const rooms = [...new Set([...((vis && vis.rooms) || []), ...Array.from(g.rooms)])].filter(isRealRoom);
             document.getElementById('modal-rooms').textContent = rooms.length
-                ? '🚪 Salons visités : ' + rooms.map(r => '/' + r).join(', ')
+                ? '🚪 Salons visités : ' + rooms.map(r => r === '/' ? '/' : '/' + r).join(', ')
                 : '';
             
             _currentProfile = { g, extra };
@@ -657,8 +679,8 @@
             if (trigger) {
                 const ip = trigger.dataset.ip;
                 if (window._profileMap[ip]) {
-                    const { g, extra } = window._profileMap[ip];
-                    openProfile(g, extra);
+                    const { g, extra, vis } = window._profileMap[ip];
+                    openProfile(g, extra, vis);
                 }
             }
         });
