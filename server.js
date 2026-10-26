@@ -163,6 +163,11 @@ const HASH_SPAM_STATE = 'spam_state';
 // Suivi ip -> pseudos/salons utilises, pour les colonnes « Pseudo(s) » et
 // « Room(s) » du panneau admin (les logs ne contiennent ni pseudo ni salon).
 const HASH_IP_VISITS = 'ip_visits';
+// Bans temporaires (« Kick 30s ») persistes par IP : { ip: { until } }.
+// Sans ca, la cible se reconnectait immediatement (le deconnexion socket
+// seule ne bloque rien). Expiration = timestamp ms.
+const HASH_TEMP_BANS = 'temp_bans';
+const TEMP_BAN_MS = 30 * 1000;
 const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
 // Nombre maximum de lignes de logs conservees (voir store.lTrimLast).
@@ -787,6 +792,7 @@ function modBy(socket) {
 
 let cacheBlacklist = { data: null, exp: 0 };
 let cacheConfig = { data: null, exp: 0 };
+let cacheTempBans = { data: null, exp: 0 };
 
 /* Applique les reglages admin (blacklist / liste blanche / redirection).
    Cache en mémoire (15s) pour économiser les quotas Upstash Redis.       */
@@ -804,6 +810,22 @@ async function checkRoomAccess(ip) {
   }
   if (rec && rec.blocked === true) return { allowed: false, reason: 'banned', redirect: '' };
 
+  // Ban temporaire (« Kick 30s ») : bloque la reconnexion jusqu'a expiration.
+  let tb = cacheTempBans.data;
+  if (!tb || now > cacheTempBans.exp) {
+    tb = await store.hGetAll(HASH_TEMP_BANS);
+    cacheTempBans = { data: tb, exp: now + 3000 };
+  }
+  const tbRaw = tb ? tb[ip] : undefined;
+  if (tbRaw) {
+    let tbRec = null;
+    try { tbRec = typeof tbRaw === 'string' ? JSON.parse(tbRaw) : tbRaw; } catch (e) { tbRec = null; }
+    const until = tbRec && Number(tbRec.until) || 0;
+    if (until > now) return { allowed: false, reason: 'tempbanned', redirect: '', until };
+    // expire : on nettoie (best effort)
+    if (until && until <= now) { store.hDel(HASH_TEMP_BANS, ip).catch(() => {}); cacheTempBans.exp = 0; }
+  }
+
   let cfg = cacheConfig.data;
   if (!cfg || now > cacheConfig.exp) {
     cfg = await store.hGetAll(KEY_CONFIG);
@@ -816,6 +838,23 @@ async function checkRoomAccess(ip) {
   return { allowed: true };
 }
 
+/* Purge periodique des bans temporaires expires : sans ca, une IP
+   temp-bannie qui ne revient jamais laisse une entree orpheline dans le
+   hash. Meme logique que les autres purges (voir plus haut).             */
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const all = await store.hGetAll(HASH_TEMP_BANS);
+    for (const [ip, raw] of Object.entries(all)) {
+      let rec = null;
+      try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { rec = null; }
+      const until = (rec && Number(rec.until)) || 0;
+      if (!until || until <= now) await store.hDel(HASH_TEMP_BANS, ip);
+    }
+    cacheTempBans.exp = 0;
+  } catch (e) { /* ignore */ }
+}, 60 * 1000).unref();
+
 io.on('connection', (socket) => {
   socket.data = { room: null, profile: { displayName: 'Guest', profileColor: '#4A90E2' }, isMod: false, modName: 'Mod' };
   const ip = clientIp(socket.request);
@@ -826,7 +865,9 @@ io.on('connection', (socket) => {
     // Blacklist / liste blanche : refus avant de rejoindre la salle.
     const access = await checkRoomAccess(ip);
     if (!access.allowed) {
-      socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect });
+      // `until` (ban temporaire) est transmis pour que la victime puisse
+      // afficher un decompte (« Reviens dans Xs ») au lieu d'un simple BAN.
+      socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect, until: access.until });
       socket.disconnect(true);
       return;
     }
@@ -1019,6 +1060,18 @@ io.on('connection', (socket) => {
           if (targetIp) await store.hSet(HASH_BLACKLIST, targetIp, { blocked: true, whitelist: false });
         }
         cacheBlacklist.exp = 0;
+      }
+      if (event === 'mod-kick-temp') {
+        // Kick 30s persistant : bloque aussi la RECONNEXION par IP pendant
+        // TEMP_BAN_MS. La deconnexion seule ne suffisait pas (reconnect
+        // immediate possible). On note l'expiration et checkRoomAccess
+        // refuse l'entree jusqu'a celle-ci.
+        const until = Date.now() + TEMP_BAN_MS;
+        for (const s of target) {
+          const targetIp = clientIp(s.request);
+          if (targetIp) await store.hSet(HASH_TEMP_BANS, targetIp, { until });
+        }
+        cacheTempBans.exp = 0;
       }
       for (const s of target) { mutedSockets.delete(s.id); s.disconnect(true); }
     }
