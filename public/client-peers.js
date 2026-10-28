@@ -265,17 +265,15 @@ function createPeerConnection(userId) {
     };
 
     pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed' && pc.restartIce) pc.restartIce();
-        if (pc.connectionState === 'connected') {
-            const peerEl = document.getElementById(`peer-${userId}`);
-            if (peerEl && pc.remoteStream.getTracks().length > 0) {
-                const videoEl = peerEl.querySelector('video');
-                if (videoEl && videoEl.srcObject !== pc.remoteStream) {
-                    videoEl.srcObject = pc.remoteStream;
-                }
-            }
-        }
-    };
+    if (pc.connectionState === 'disconnected') {
+        // attendre un peu — souvent transitoire — puis forcer une reprise si ça persiste
+        setTimeout(() => {
+            if (pc.connectionState === 'disconnected' && pc.restartIce) pc.restartIce();
+        }, 3000);
+    }
+    if (pc.connectionState === 'failed' && pc.restartIce) pc.restartIce();
+    ...
+};
 
     pc.onnegotiationneeded = async () => {
         try {
