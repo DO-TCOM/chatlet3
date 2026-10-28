@@ -265,15 +265,25 @@ function createPeerConnection(userId) {
     };
 
     pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'disconnected') {
-        // attendre un peu — souvent transitoire — puis forcer une reprise si ça persiste
-        setTimeout(() => {
-            if (pc.connectionState === 'disconnected' && pc.restartIce) pc.restartIce();
-        }, 3000);
-    }
-    if (pc.connectionState === 'failed' && pc.restartIce) pc.restartIce();
-    ...
-};
+        if (pc.connectionState === 'disconnected') {
+            // Coupure breve (reseau instable) : souvent transitoire, mais si ca
+            // persiste plus de 3s sans recuperation naturelle, on force une reprise
+            // ICE au lieu de rester fige indefiniment sur la derniere frame.
+            setTimeout(() => {
+                if (pc.connectionState === 'disconnected' && pc.restartIce) pc.restartIce();
+            }, 3000);
+        }
+        if (pc.connectionState === 'failed' && pc.restartIce) pc.restartIce();
+        if (pc.connectionState === 'connected') {
+            const peerEl = document.getElementById(`peer-${userId}`);
+            if (peerEl && pc.remoteStream.getTracks().length > 0) {
+                const videoEl = peerEl.querySelector('video');
+                if (videoEl && videoEl.srcObject !== pc.remoteStream) {
+                    videoEl.srcObject = pc.remoteStream;
+                }
+            }
+        }
+    };
 
     pc.onnegotiationneeded = async () => {
         try {
