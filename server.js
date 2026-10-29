@@ -905,9 +905,9 @@ io.on('connection', (socket) => {
     await store.hDel(HASH_PROFILES, `${room}:${socket.id}`);
   });
 
-  socket.on('profile-update', async (data) => {
+  socket.on('profile-update', async (data, ack) => {
     const room = cleanText(data && data.roomId, 64) || socket.data.room;
-    if (!room) return;
+    if (!room) { if (typeof ack === 'function') ack(); return; }
     const access = await checkRoomAccess(ip);
     if (!access.allowed) {
       socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect });
@@ -944,6 +944,11 @@ io.on('connection', (socket) => {
     }
 
     socket.to(room).emit('profile-update', { id: socket.id, displayName, profileColor });
+    // Ack : garantit que l'eviction de l'ancien socket (ci-dessus) est bien
+    // terminee avant que le client n'envoie join-room, sinon join-room peut
+    // lire le store avant la suppression et renvoyer brievement un profil
+    // fantome (l'ancienne connexion du meme uuid) via sync-profiles.
+    if (typeof ack === 'function') ack();
   });
 
   socket.on('url-identity', (data) => {

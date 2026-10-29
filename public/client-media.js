@@ -132,8 +132,9 @@ async function start(useVideo, useAudio) {
         } catch (err) { console.error('Media error:', err); }
     }
 
-    socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
-    socket.emit('join-room', roomId);
+    socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() }, () => {
+        socket.emit('join-room', roomId);
+    });
 
     if (_urlPseudo || _urlColor) {
         socket.emit('url-identity', { pseudo: _urlPseudo, color: _urlColor });

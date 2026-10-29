@@ -50,8 +50,12 @@ socket.on('connect', () => {
     const modSecret = localStorage.getItem('modSecret');
     if (modSecret) setTimeout(() => socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }), 500);
     if (roomId) {
-        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() });
-        socket.emit('join-room', roomId);
+        // join-room attend l'ack de profile-update : sinon le serveur peut
+        // encore avoir l'ancienne connexion (meme uuid) en store au moment
+        // ou join-room construit sync-profiles, d'ou un profil fantome.
+        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor, uuid: getUUID() }, () => {
+            socket.emit('join-room', roomId);
+        });
     }
     if (isModerator) {
         setTimeout(() => socket.emit('mod-badge', { roomId }), 600);
