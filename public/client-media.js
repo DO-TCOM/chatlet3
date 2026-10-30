@@ -31,7 +31,7 @@ async function handleToggleVideo() {
     let justCreated = false;
     if (localStream.getVideoTracks().length === 0) {
         try {
-            const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } });
+            const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
             const track = newStream.getVideoTracks()[0];
             localStream.addTrack(track);
             syncLocalTracksToPeers();
@@ -133,7 +133,7 @@ async function start(useVideo, useAudio) {
     if (useVideo || useAudio) {
         try {
             const constraints = {
-                video: useVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+                video: useVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
                 audio: useAudio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
             };
             localStream = await navigator.mediaDevices.getUserMedia(constraints);
