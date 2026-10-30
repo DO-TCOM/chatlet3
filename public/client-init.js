@@ -165,29 +165,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             mutedPeers.delete(targetId);
         }
         syncMuteButtons(targetId);
-        if (featuredUserId === targetId) {
-            const featuredEl = document.querySelector('.peer.featured');
-            if (featuredEl) {
-                featuredEl.querySelector('.mod-controls')?.remove();
-                const id = targetId;
-                const modDiv = document.createElement('div');
-                modDiv.id = 'featured-mod-controls';
-                modDiv.className = 'mod-controls';
-                modDiv.style.cssText = 'position:absolute;top:10px;left:10px;display:flex;gap:6px;z-index:10;flex-wrap:wrap;';
-                const makeBtn = (label, bg, action) => {
-                    const btn = document.createElement('button');
-                    btn.innerText = label;
-                    btn.style.cssText = `font-size:12px;padding:4px 10px;width:auto;height:auto;background:${bg};color:white;border:none;border-radius:4px;cursor:pointer;`;
-                    btn.onclick = (e) => { e.stopPropagation(); socket.emit(action, id); };
-                    return btn;
-                };
-                modDiv.appendChild(makeBtn('Kick', '#ff8800', 'mod-kick'));
-                modDiv.appendChild(makeBtn('Kick 30s', '#ff5500', 'mod-kick-temp'));
-                modDiv.appendChild(makeBtn('Ban', '#cc0000', 'mod-ban'));
-                modDiv.appendChild(buildMuteBtn(id, false, '12px', '4px 10px'));
-                featuredEl.appendChild(modDiv);
-            }
-        }
     });
 
     socket.on('mod-action', (action) => {
@@ -280,4 +257,3 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 });
-

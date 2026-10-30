@@ -1,3 +1,13 @@
+const VIDEO_MAX_BITRATE = 700000; // ~700kbps : limite le debit pour rester stable en mesh (N-1 flux)
+
+function applyVideoBitrate(sender) {
+    if (!sender || !sender.track || sender.track.kind !== 'video') return;
+    const params = sender.getParameters();
+    if (!params.encodings) params.encodings = [{}];
+    params.encodings.forEach(enc => { enc.maxBitrate = VIDEO_MAX_BITRATE; });
+    sender.setParameters(params).catch(() => {});
+}
+
 function syncLocalTracksToPeers() {
     if (!localStream) return;
     const streamTracks = localStream.getTracks();
@@ -7,7 +17,10 @@ function syncLocalTracksToPeers() {
         const senders = pc.getSenders();
         streamTracks.forEach(track => {
             const exists = senders.some(sender => sender.track && sender.track.id === track.id);
-            if (!exists) pc.addTrack(track, localStream);
+            if (!exists) {
+                const sender = pc.addTrack(track, localStream);
+                applyVideoBitrate(sender);
+            }
         });
     }
 }
@@ -40,7 +53,7 @@ async function handleToggleAudio() {
     let justCreated = false;
     if (localStream.getAudioTracks().length === 0) {
         try {
-            const newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const newStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
             const track = newStream.getAudioTracks()[0];
             localStream.addTrack(track);
             setupAudioAnalysis(localStream);
@@ -119,7 +132,10 @@ async function start(useVideo, useAudio) {
 
     if (useVideo || useAudio) {
         try {
-            const constraints = { video: useVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false, audio: useAudio };
+            const constraints = {
+                video: useVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+                audio: useAudio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
+            };
             localStream = await navigator.mediaDevices.getUserMedia(constraints);
             updateLocalVideoElement(localStream);
             if (useVideo) toggleVideoBtn.classList.remove('off');
@@ -234,4 +250,3 @@ socket.on('signal', (data) => {
         }
     }
 });
-
