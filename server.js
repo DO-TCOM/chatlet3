@@ -23,13 +23,7 @@ const { Server } = require('socket.io');
 const PORT = Number(process.env.PORT) || 3000;
 const MOD_PASSWORD = (process.env.MOD_PASSWORD || '').trim();
 const STATS_PASSWORD = (process.env.STATS_PASSWORD || '').trim();
-const REDIS_URL = (process.env.REDIS_URL || '').trim();
-const TURN_URL = (process.env.TURN_URL || '').trim();
-const TURN_SECRET = (process.env.TURN_SECRET || process.env.TURN_AUTH_SECRET || '').trim();
-const TURN_USERNAME = (process.env.TURN_USERNAME || '').trim();
-const TURN_CREDENTIAL = (process.env.TURN_CREDENTIAL || '').trim();
-const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || '').trim();
-const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+// REDIS_URL, TURN_*, TWILIO_* : lus directement par storage.js / routes-api.js.
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const app = express();
@@ -57,70 +51,22 @@ const {
   LOGS_MAX_LINES,
 } = require('./storage');
 
-const HASH_RE = /^[!-~]{16,128}$/;
+/* ─────────────────── Fonctions utilitaires ─────────────────── */
+/* Deplacees dans ./utils.js (validation, encodage, detection UA). */
 
-const RESERVED_ROOM_NAMES = new Set([
-  'api', 'admin', 'health', 'socket.io', 'socketio', 'favicon.ico', 'robots.txt',
-  'manifest.json', 'index.html', 'room.html', '404.html', 'admin-stats.html', 'health.txt',
-  'client.js', 'client.css', 'landing.js', 'adapter.js', 'fonts.css', 'profile-transfer.html',
-  'fonts', 'images', 'audio', 'media',
-]);
-
-function isReservedRoomName(room) {
-  if (!room) return true;
-  const cleaned = room.replace(/^\/+/, '').toLowerCase();
-  if (!cleaned) return true;
-  if (RESERVED_ROOM_NAMES.has(cleaned)) return true;
-  if (cleaned.startsWith('api')) return true;
-  if (cleaned.startsWith('admin')) return true;
-  if (cleaned.startsWith('health')) return true;
-  if (cleaned.startsWith('socket.io')) return true;
-  const lastSegment = cleaned.split('/').filter(Boolean).pop() || '';
-  return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
-}
-
-function b64url(buf) {
-  return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-function fromB64url(str) {
-  const b64 = String(str).replace(/-/g, '+').replace(/_/g, '/');
-  return Buffer.from(b64, 'base64').toString('utf8');
-}
-function randomId(bytes = 16) {
-  return crypto.randomBytes(bytes).toString('hex');
-}
-function sanitizeColor(c) {
-  return /^#[0-9a-fA-F]{6}$/.test(String(c || '')) ? c : '#4A90E2';
-}
-function cleanText(s, max) {
-  return String(s == null ? '' : s).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, max);
-}
-function clientIp(req) {
-  // Derriere Cloudflare, cf-connecting-ip est pose par le CDN et ecrase la valeur
-  // envoyee par le client : c'est la seule valeur fiable. X-Forwarded-For reste un
-  // repli (appels directs au serveur, tests locaux).
-  const cf = (req.headers['cf-connecting-ip'] || '').trim();
-  if (cf) return cf;
-  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
-}
-function detectBrowser(ua) {
-  const s = String(ua || '');
-  if (/Edg\//i.test(s)) return 'Edge';
-  if (/OPR\//i.test(s)) return 'Opera';
-  if (/Chrome\//i.test(s)) return 'Chrome';
-  if (/Firefox\//i.test(s)) return 'Firefox';
-  if (/Safari\//i.test(s)) return 'Safari';
-  if (/curl/i.test(s)) return 'curl';
-  if (/Postman/i.test(s)) return 'Postman';
-  return 'Autre';
-}
-function logLine(ip, browser, room) {
-  const d = new Date();
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ` +
-    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
-  const letter = 'Z';
-  return `[${date}] IP: ${ip} | ${letter} | Unknown(Unknown) |  |  | ${browser} | ${room || '/'} `;
-}
+const {
+  HASH_RE,
+  RESERVED_ROOM_NAMES,
+  isReservedRoomName,
+  b64url,
+  fromB64url,
+  randomId,
+  sanitizeColor,
+  cleanText,
+  clientIp,
+  detectBrowser,
+  logLine,
+} = require('./utils');
 
 /* ─────────── Historique IP → pseudos / salons (panneau admin) ─────────── */
 /* Les logs HTTP ne contiennent que l'IP et le chemin visite : jamais le     */
@@ -290,110 +236,10 @@ app.use(express.static(PUBLIC_DIR, {
   },
 }));
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: Math.floor(process.uptime()) });
-});
+/* ─────────────────── Routes publiques (/health, /api/*) ─────────────────── */
+/* Deplacees dans ./routes-api.js.                                           */
 
-let twilioCache = { at: 0, servers: null };
-async function fetchTwilioIce() {
-  if (twilioCache.servers && Date.now() - twilioCache.at < 50 * 60 * 1000) return twilioCache.servers;
-  const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
-  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(TWILIO_ACCOUNT_SID)}/Tokens.json`, {
-    method: 'POST',
-    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'Ttl=3600',
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!r.ok) throw new Error('twilio ' + r.status);
-  const j = await r.json();
-  const list = (j.ice_servers || []).map((x) => ({
-    url: x.url || x.urls,
-    urls: x.urls || x.url,
-    ...(x.username ? { username: x.username, credential: x.credential } : {}),
-  }));
-  if (!list.length) throw new Error('twilio: aucun serveur');
-  twilioCache = { at: Date.now(), servers: list };
-  return list;
-}
-
-function buildMeteredIceServers() {
-  if (!TURN_USERNAME || !TURN_CREDENTIAL) return [];
-  return [
-    { urls: 'stun:stun.relay.metered.ca:80' },
-    { urls: 'turn:global.relay.metered.ca:80', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
-    { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
-    { urls: 'turn:global.relay.metered.ca:443', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
-    { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: TURN_USERNAME, credential: TURN_CREDENTIAL },
-  ];
-}
-
-app.get('/api/ice-servers', async (req, res) => {
-  let servers = [];
-  if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
-    try { servers = await fetchTwilioIce(); } catch (e) { console.error('[ice] twilio :', e.message); }
-  }
-  if (!servers.length) {
-    const metered = buildMeteredIceServers();
-    if (metered.length) servers = metered;
-  }
-  if (!servers.length) {
-    servers.push({ url: 'stun:global.stun.twilio.com:3478', urls: 'stun:global.stun.twilio.com:3478' });
-    if (TURN_URL && TURN_SECRET) {
-      const username = String(Math.floor(Date.now() / 1000) + 86400);
-      const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
-      for (const transport of ['udp', 'tcp']) {
-        const sep = TURN_URL.includes('?') ? '&' : '?';
-        const url = `${TURN_URL}${sep}transport=${transport}`;
-        servers.push({ url, urls: url, username, credential });
-      }
-    }
-  }
-  res.json(servers);
-});
-
-app.post('/api/collect', (req, res) => {
-  const ip = clientIp(req);
-  const uuid = cleanText(req.body && req.body.uuid, 64) || randomId();
-  const data = req.body && typeof req.body === 'object' ? req.body : {};
-  store.hSet(HASH_EXTRAS, uuid, { ...data, ip, ts: Date.now() }).catch(() => {});
-  res.json({ ok: true });
-});
-
-app.post('/api/get-profile-by-uuid', async (req, res) => {
-  const uuid = cleanText(req.body && req.body.uuid, 64);
-  if (!uuid) return res.json({ ok: false });
-  const all = await store.hGetAll(HASH_PROFILES);
-  const raw = all['uuid:' + uuid];
-  if (!raw) return res.json({ ok: false });
-  let profile = raw;
-  try { profile = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return res.json({ ok: false }); }
-  res.json({ ok: true, profile: { pseudo: profile.pseudo, color: profile.color } });
-});
-
-app.get('/api/profile-by-token/:hash', (req, res) => {
-  const hash = cleanText(req.params.hash, 512);
-  if (!hash || hash.length < 5) return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'));
-  let decoded = '';
-  try { decoded = fromB64url(hash); } catch (e) { return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html')); }
-  const idx = decoded.lastIndexOf(':');
-  if (idx === -1) return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'));
-  const pseudo = decoded.slice(0, idx).trim();
-  const color = decoded.slice(idx + 1).trim();
-  if (!pseudo || !color) return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'));
-  res.json({ ok: true, pseudo, color: color.startsWith('#') ? color : '#' + color });
-});
-
-app.post('/api/room-profile', (req, res) => {
-  const room = cleanText(req.body && req.body.room, 64);
-  const pseudo = cleanText(req.body && req.body.pseudo, 50);
-  const color = cleanText(req.body && req.body.color, 16);
-  if (!room || !pseudo) return res.status(400).json({ ok: false });
-  const payload = `${pseudo}:${color.replace(/^#/, '')}`;
-  const token = b64url(payload);
-  const host = req.headers.host || 'localhost';
-  const url = `https://${host}/${room}#${token}`;
-  res.json({ ok: true, url, token });
-});
+app.use(require('./routes-api')({ store, HASH_EXTRAS, HASH_PROFILES, PUBLIC_DIR }));
 
 const HASH_ADMIN_TOKENS = 'admin_tokens';
 
