@@ -445,10 +445,17 @@ const MUTE_STEPS = [15e3, 60e3, 600e3, 3600e3, 86400e3];
 // messages cote serveur, contrairement a l'ancien systeme purement visuel.
 const mutedSockets = new Set();
 
+// IP exemptees de la limite anti-spam (bouton "Illimite" du panneau mod).
+// En memoire uniquement : non persistant, sauf au prochain redemarrage.
+const spamExemptIps = new Set();
+
 // Stocke dans Redis/fichier (plus une Map en memoire) : un redemarrage de
 // l'instance (Render free tier se met en veille) ne doit pas remettre a
 // zero le niveau de mute progressif anti-spam par IP.
 async function spamCheck(ip, message) {
+  if (spamExemptIps.has(ip)) {
+    return { blocked: false, muted: false, muteExpired: false, message: '' };
+  }
   const now = Date.now();
   const all = await store.hGetAll(HASH_SPAM_STATE);
   let st = null;
@@ -783,6 +790,18 @@ io.on('connection', (socket) => {
       socket.emit('mod-mute-ack', { targetId: id, muted });
       return;
     }
+
+    if (event === 'mod-spam-exempt' || event === 'mod-spam-unexempt') {
+      const exempt = event === 'mod-spam-exempt';
+      const target = await io.in(id).fetchSockets();
+      for (const s of target) {
+        const targetIp = clientIp(s.request);
+        if (!targetIp) continue;
+        if (exempt) spamExemptIps.add(targetIp); else spamExemptIps.delete(targetIp);
+      }
+      socket.emit('mod-spam-exempt-ack', { targetId: id, exempt });
+      return;
+    }
     if (event === 'mod-kick' || event === 'mod-kick-temp' || event === 'mod-ban') {
       const kind = event === 'mod-kick' ? 'kicked' : event === 'mod-kick-temp' ? 'kicked-temp' : 'banned';
       io.to(id).emit('mod-action', { type: kind, by });
@@ -816,6 +835,8 @@ io.on('connection', (socket) => {
   socket.on('mod-kick', modAction('mod-kick'));
   socket.on('mod-kick-temp', modAction('mod-kick-temp'));
   socket.on('mod-ban', modAction('mod-ban'));
+  socket.on('mod-spam-exempt', modAction('mod-spam-exempt'));
+  socket.on('mod-spam-unexempt', modAction('mod-spam-unexempt'));
 
   socket.on('disconnect', async () => {
     mutedSockets.delete(socket.id);
