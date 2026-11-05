@@ -703,7 +703,10 @@ io.on('connection', (socket) => {
       socket.disconnect(true);
       return;
     }
-    if (mutedSockets.has(socket.id)) {
+
+    // Les moderateurs ne sont jamais mute (manuel ou anti-spam), ni soumis
+    // a la limite de frequence/longueur des messages.
+    if (!isMod(socket) && mutedSockets.has(socket.id)) {
       socket.emit('spam-warning', { blocked: true, muted: true, muteExpired: false, message: 'Tu es mute par un moderateur.' });
       return;
     }
@@ -711,13 +714,15 @@ io.on('connection', (socket) => {
     const message = cleanText(data && data.message, 200);
     if (!message) return;
 
-    const check = await spamCheck(ip, message);
-    if (check.blocked) {
-      socket.emit('spam-warning', check);
-      return;
+    if (!isMod(socket)) {
+      const check = await spamCheck(ip, message);
+      if (check.blocked) {
+        socket.emit('spam-warning', check);
+        return;
+      }
+      // Le mute automatique vient d'expirer : le client re-active son champ de saisie.
+      if (check.muteExpired) socket.emit('spam-unmuted');
     }
-    // Le mute automatique vient d'expirer : le client re-active son champ de saisie.
-    if (check.muteExpired) socket.emit('spam-unmuted');
     // Le pseudo/couleur viennent du profil connu du serveur (profile-update),
     // pas du payload client : sinon un visiteur peut usurper un autre pseudo
     // a chaque message sans jamais changer son profil reel.
