@@ -126,6 +126,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     toggleMenuBtn.addEventListener('click', () => menuElement.classList.toggle('hidden'));
 
+    (function initChatPanelResize() {
+        const handleLeft = document.querySelector('.chat .panel .resizeLeft');
+        const handleTop = document.querySelector('.chat .panel .resizeTop');
+        if (!handleLeft || !handleTop || !chatPanel) return;
+
+        const savedWidth = localStorage.getItem('chatPanelWidth');
+        const savedHeight = localStorage.getItem('chatPanelHeight');
+        if (savedWidth) chatPanel.style.width = savedWidth;
+        if (savedHeight) chatPanel.style.height = savedHeight;
+
+        function startDrag(handle, onMove) {
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const onMouseMove = (ev) => onMove(ev);
+                const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        startDrag(handleLeft, (ev) => {
+            const rect = chatPanel.getBoundingClientRect();
+            const newWidth = Math.min(Math.max(rect.right - ev.clientX, 240), window.innerWidth);
+            chatPanel.style.width = newWidth + 'px';
+            localStorage.setItem('chatPanelWidth', newWidth + 'px');
+        });
+
+        startDrag(handleTop, (ev) => {
+            const rect = chatPanel.getBoundingClientRect();
+            const newHeight = Math.min(Math.max(rect.bottom - ev.clientY, 160), window.innerHeight);
+            chatPanel.style.height = newHeight + 'px';
+            localStorage.setItem('chatPanelHeight', newHeight + 'px');
+        });
+    })();
+
     if (soundNotificationsCheckbox) {
         soundNotificationsCheckbox.addEventListener('change', (e) => {
             allowSoundNotifications = e.target.checked;
