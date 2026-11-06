@@ -129,6 +129,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     (function initChatPanelResize() {
         const handleLeft = document.querySelector('.chat .panel .resizeLeft');
         const handleTop = document.querySelector('.chat .panel .resizeTop');
+        const handleGrip = document.querySelector('.chat .panel .resizeGrip');
         if (!handleLeft || !handleTop || !chatPanel) return;
 
         const savedWidth = localStorage.getItem('chatPanelWidth');
@@ -156,12 +157,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             localStorage.setItem('chatPanelWidth', newWidth + 'px');
         });
 
-        startDrag(handleTop, (ev) => {
+        function resizeHeight(ev) {
             const rect = chatPanel.getBoundingClientRect();
             const newHeight = Math.min(Math.max(rect.bottom - ev.clientY, 160), window.innerHeight);
             chatPanel.style.height = newHeight + 'px';
             localStorage.setItem('chatPanelHeight', newHeight + 'px');
-        });
+        }
+
+        startDrag(handleTop, resizeHeight);
+
+        if (handleGrip) {
+            startDrag(handleGrip, (ev) => {
+                const rect = chatPanel.getBoundingClientRect();
+                const newWidth = Math.min(Math.max(rect.right - ev.clientX, 240), window.innerWidth);
+                chatPanel.style.width = newWidth + 'px';
+                localStorage.setItem('chatPanelWidth', newWidth + 'px');
+                resizeHeight(ev);
+            });
+        }
     })();
 
     if (soundNotificationsCheckbox) {
