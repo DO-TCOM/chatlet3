@@ -115,11 +115,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggleScreenShareBtn = document.querySelector('.toggleScreenShare');
     if (toggleScreenShareBtn) toggleScreenShareBtn.addEventListener('click', handleToggleScreenShare);
 
-    // Auto-join direct en mode chat (sans écran de bienvenue)
     // noSleep activé sur le premier geste utilisateur (requis sur iOS/Safari)
     document.addEventListener('click', () => noSleep.enable(), { once: true });
     document.addEventListener('touchstart', () => noSleep.enable(), { once: true });
-    start(false, false);
 
     toggleChatBtn.addEventListener('click', () => {
         chatPanel.classList.toggle('hidden');
