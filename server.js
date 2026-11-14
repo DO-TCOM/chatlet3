@@ -118,45 +118,112 @@ setInterval(async () => {
   } catch (e) { /* ignore */ }
 }, VISIT_PURGE_MS).unref();
 
-/* ─────────────────── Limiteur d'authentification ─────────────────── */
-/* Compte les tentatives de login admin et de mod-auth socket par IP.  */
-/* Le compteur est remis a zero des qu'une tentative reussit, afin de  */
-/* ne pas penaliser un moderateur legitime.                            */
+/* ─────────────────── Blacklist & Accès Salles ─────────────────── */
+let cacheBlacklist = { data: null, exp: 0 };
+let cacheConfig = { data: null, exp: 0 };
+let cacheTempBans = { data: null, exp: 0 };
 
-const AUTH_WINDOW_MS = 15 * 60 * 1000;
-const AUTH_MAX_ATTEMPTS = 10;
-
-// Stocke dans Redis/fichier (plus une Map en memoire) : un redemarrage de
-// l'instance (Render free tier se met en veille) ne doit pas remettre a
-// zero le compteur de tentatives de connexion admin/mod.
-async function authRateLimit(ip) {
+/* Applique les reglages admin (blacklist / liste blanche / redirection).
+   Cache en mémoire (15s) pour économiser les quotas Upstash Redis.       */
+async function checkRoomAccess(ip) {
   const now = Date.now();
-  const all = await store.hGetAll(HASH_AUTH_ATTEMPTS);
-  let st = null;
-  try { st = all[ip] ? JSON.parse(all[ip]) : null; } catch (e) { st = null; }
-  if (!st || now >= st.resetAt) st = { count: 0, resetAt: now + AUTH_WINDOW_MS };
-  st.count += 1;
-  await store.hSet(HASH_AUTH_ATTEMPTS, ip, st);
-  return {
-    blocked: st.count > AUTH_MAX_ATTEMPTS,
-    retryAfter: Math.ceil((st.resetAt - now) / 1000),
-  };
+  let rules = cacheBlacklist.data;
+  if (!rules || now > cacheBlacklist.exp) {
+    rules = await store.hGetAll(HASH_BLACKLIST);
+    cacheBlacklist = { data: rules, exp: now + 15000 };
+  }
+  let rec = null;
+  const raw = rules ? rules[ip] : undefined;
+  if (raw) {
+    try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { rec = null; }
+  }
+  if (rec && rec.blocked === true) return { allowed: false, reason: 'banned', redirect: '' };
+
+  // Ban temporaire (« Kick 30s ») : bloque la reconnexion jusqu'a expiration.
+  let tb = cacheTempBans.data;
+  if (!tb || now > cacheTempBans.exp) {
+    tb = await store.hGetAll(HASH_TEMP_BANS);
+    cacheTempBans = { data: tb, exp: now + 3000 };
+  }
+  const tbRaw = tb ? tb[ip] : undefined;
+  if (tbRaw) {
+    let tbRec = null;
+    try { tbRec = typeof tbRaw === 'string' ? JSON.parse(tbRaw) : tbRaw; } catch (e) { tbRec = null; }
+    const until = tbRec && Number(tbRec.until) || 0;
+    if (until > now) return { allowed: false, reason: 'tempbanned', redirect: '', until };
+    if (until && until <= now) { store.hDel(HASH_TEMP_BANS, ip).catch(() => {}); cacheTempBans.exp = 0; }
+  }
+
+  let cfg = cacheConfig.data;
+  if (!cfg || now > cacheConfig.exp) {
+    cfg = await store.hGetAll(KEY_CONFIG);
+    cacheConfig = { data: cfg, exp: now + 15000 };
+  }
+  const whitelistMode = cfg && (cfg.whitelist_mode === 'true' || cfg.whitelist_mode === true);
+  if (whitelistMode && !(rec && rec.whitelist === true)) {
+    return { allowed: false, reason: 'whitelist', redirect: String((cfg && cfg.redirect_url) || '') };
+  }
+  return { allowed: true };
 }
+
+async function banIp(ip) {
+  if (!ip) return;
+  await store.hSet(HASH_BLACKLIST, ip, { ip, blocked: true, whitelist: false });
+  cacheBlacklist.exp = 0;
+  if (typeof io !== 'undefined' && io && io.fetchSockets) {
+    try {
+      const allSockets = await io.fetchSockets();
+      for (const s of allSockets) {
+        if (clientIp(s.request) === ip) {
+          s.emit('room-blocked', { reason: 'banned', redirect: '' });
+          s.disconnect(true);
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+}
+
+async function isIpBanned(ip) {
+  if (!ip) return false;
+  const access = await checkRoomAccess(ip);
+  return !access.allowed && access.reason === 'banned';
+}
+
+/* ─────────── Limiteur d'authentification (Option 3 : strict 2 essais) ─────────── */
+/* 2 tentatives erronées max par IP sans limite de temps (permanent).             */
+/* Dès la 2ème erreur de mot de passe (ou tentative suspecte), l'IP est bannie   */
+/* directement dans la blacklist Redis permanente.                                 */
+const AUTH_MAX_ATTEMPTS = 2;
+
+async function isAuthBlocked(ip) {
+  if (!ip) return false;
+  if (await isIpBanned(ip)) return true;
+  const raw = await store.hGet(HASH_AUTH_ATTEMPTS, ip);
+  let st = null;
+  try { st = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null; } catch (e) { st = null; }
+  return !!(st && Number(st.count) >= AUTH_MAX_ATTEMPTS);
+}
+
+async function recordAuthFailure(ip) {
+  if (!ip) return { blocked: true, count: AUTH_MAX_ATTEMPTS };
+  const raw = await store.hGet(HASH_AUTH_ATTEMPTS, ip);
+  let st = null;
+  try { st = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null; } catch (e) { st = null; }
+  if (!st || typeof st !== 'object') st = { count: 0, firstFail: Date.now() };
+  st.count = (Number(st.count) || 0) + 1;
+  st.lastFail = Date.now();
+  await store.hSet(HASH_AUTH_ATTEMPTS, ip, st);
+  if (st.count >= AUTH_MAX_ATTEMPTS) {
+    await banIp(ip);
+    return { blocked: true, count: st.count };
+  }
+  return { blocked: false, count: st.count };
+}
+
 async function authRateClear(ip) {
+  if (!ip) return;
   await store.hDel(HASH_AUTH_ATTEMPTS, ip);
 }
-
-/* Purge periodique : evite que le hash croisse sans borne, un IP etant
-   une cle librement falsifiable via X-Forwarded-For.                  */
-setInterval(async () => {
-  const now = Date.now();
-  const all = await store.hGetAll(HASH_AUTH_ATTEMPTS);
-  for (const [ip, raw] of Object.entries(all)) {
-    let st = null;
-    try { st = JSON.parse(raw); } catch (e) { st = null; }
-    if (!st || now >= st.resetAt) await store.hDel(HASH_AUTH_ATTEMPTS, ip);
-  }
-}, AUTH_WINDOW_MS).unref();
 
 app.use((req, res, next) => {
   const host = req.headers.host || 'localhost';
@@ -275,16 +342,18 @@ setInterval(async () => {
 
 app.post('/admin/api/login', async (req, res) => {
   const ip = clientIp(req);
-  const limit = await authRateLimit(ip);
-  if (limit.blocked) {
-    return res.status(429).json({ ok: false, message: `Trop de tentatives. Reessaye dans ${limit.retryAfter}s.` });
+  if (await isAuthBlocked(ip)) {
+    return res.status(403).json({ ok: false, message: 'Accès bloqué. Trop de tentatives erronées (IP bannie).' });
   }
   const password = cleanText(req.body && req.body.password, 128);
-  if (!HASH_RE.test(password)) {
-    return res.status(400).json({ ok: false, message: 'Invalid password format' });
+  const ok = HASH_RE.test(password) && ((MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD));
+  if (!ok) {
+    const fail = await recordAuthFailure(ip);
+    if (fail.blocked) {
+      return res.status(403).json({ ok: false, message: 'Mot de passe incorrect. IP bannie définitivement.' });
+    }
+    return res.status(401).json({ ok: false, message: `Mot de passe incorrect (${AUTH_MAX_ATTEMPTS - fail.count} tentative restante avant ban).` });
   }
-  const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
-  if (!ok) return res.status(401).json({ ok: false, message: 'Mot de passe incorrect' });
   await authRateClear(ip);
   res.json({ ok: true, token: await issueAdminToken() });
 });
@@ -335,7 +404,10 @@ app.post('/admin/api/data', async (req, res) => {
     extras,
     visits,
     notes: rawNotes,
-    blacklist: Object.values(rawBl).map(parse),
+    blacklist: Object.entries(rawBl).map(([ip, val]) => {
+      const p = parse(val);
+      return typeof p === 'object' && p ? { ip, ...p } : { ip, blocked: false, whitelist: false };
+    }),
     config: {
       whitelist_mode: rawConfig.whitelist_mode === 'true' || rawConfig.whitelist_mode === true,
       redirect_url: rawConfig.redirect_url || '',
@@ -364,10 +436,15 @@ app.post('/admin/api/toggle', async (req, res) => {
   const key = cleanText(ip, 64);
   if (!key) return res.status(400).json({ ok: false });
   const current = (await store.hGetAll(HASH_BLACKLIST))[key] || {};
-  const rec = { blocked: current.blocked === true, whitelist: current.whitelist === true };
+  let rec = current;
+  try { rec = typeof current === 'string' ? JSON.parse(current) : current; } catch (e) { rec = {}; }
+  rec = { ip: key, blocked: rec.blocked === true, whitelist: rec.whitelist === true };
   if (field === 'blocked' || field === 'whitelist') rec[field] = value === true || value === 'true';
   await store.hSet(HASH_BLACKLIST, key, rec);
   cacheBlacklist.exp = 0;
+  if (field === 'blocked' && !rec.blocked) {
+    await store.hDel(HASH_AUTH_ATTEMPTS, key);
+  }
   res.json({ ok: true });
 });
 
@@ -525,54 +602,6 @@ function isMod(socket) {
 }
 function modBy(socket) {
   return (socket.data && socket.data.modName) || 'Mod';
-}
-
-let cacheBlacklist = { data: null, exp: 0 };
-let cacheConfig = { data: null, exp: 0 };
-let cacheTempBans = { data: null, exp: 0 };
-
-/* Applique les reglages admin (blacklist / liste blanche / redirection).
-   Cache en mémoire (15s) pour économiser les quotas Upstash Redis.       */
-async function checkRoomAccess(ip) {
-  const now = Date.now();
-  let rules = cacheBlacklist.data;
-  if (!rules || now > cacheBlacklist.exp) {
-    rules = await store.hGetAll(HASH_BLACKLIST);
-    cacheBlacklist = { data: rules, exp: now + 15000 };
-  }
-  let rec = null;
-  const raw = rules ? rules[ip] : undefined;
-  if (raw) {
-    try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { rec = null; }
-  }
-  if (rec && rec.blocked === true) return { allowed: false, reason: 'banned', redirect: '' };
-
-  // Ban temporaire (« Kick 30s ») : bloque la reconnexion jusqu'a expiration.
-  let tb = cacheTempBans.data;
-  if (!tb || now > cacheTempBans.exp) {
-    tb = await store.hGetAll(HASH_TEMP_BANS);
-    cacheTempBans = { data: tb, exp: now + 3000 };
-  }
-  const tbRaw = tb ? tb[ip] : undefined;
-  if (tbRaw) {
-    let tbRec = null;
-    try { tbRec = typeof tbRaw === 'string' ? JSON.parse(tbRaw) : tbRaw; } catch (e) { tbRec = null; }
-    const until = tbRec && Number(tbRec.until) || 0;
-    if (until > now) return { allowed: false, reason: 'tempbanned', redirect: '', until };
-    // expire : on nettoie (best effort)
-    if (until && until <= now) { store.hDel(HASH_TEMP_BANS, ip).catch(() => {}); cacheTempBans.exp = 0; }
-  }
-
-  let cfg = cacheConfig.data;
-  if (!cfg || now > cacheConfig.exp) {
-    cfg = await store.hGetAll(KEY_CONFIG);
-    cacheConfig = { data: cfg, exp: now + 15000 };
-  }
-  const whitelistMode = cfg && (cfg.whitelist_mode === 'true' || cfg.whitelist_mode === true);
-  if (whitelistMode && !(rec && rec.whitelist === true)) {
-    return { allowed: false, reason: 'whitelist', redirect: String((cfg && cfg.redirect_url) || '') };
-  }
-  return { allowed: true };
 }
 
 /* Purge periodique des bans temporaires expires : sans ca, une IP
@@ -760,17 +789,34 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mod-auth', async (data) => {
-    const limit = await authRateLimit(ip);
-    if (limit.blocked) {
+    if (await isAuthBlocked(ip)) {
       socket.emit('mod-status', false);
+      socket.emit('room-blocked', { reason: 'banned', redirect: '' });
+      socket.disconnect(true);
       return;
     }
     const password = cleanText(data && data.password, 128);
+    // Gestion du bouton "Oublier" du panneau modo (ne compte pas comme tentative erronée)
+    if (!password || password === '__retrait__') {
+      socket.data.isMod = false;
+      socket.emit('mod-status', false);
+      return;
+    }
     const ok = (MOD_PASSWORD && password === MOD_PASSWORD) || (STATS_PASSWORD && password === STATS_PASSWORD);
-    if (ok) await authRateClear(ip);
-    socket.data.isMod = ok;
-    socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
-    socket.emit('mod-status', ok);
+    if (ok) {
+      await authRateClear(ip);
+      socket.data.isMod = true;
+      socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
+      socket.emit('mod-status', true);
+    } else {
+      socket.data.isMod = false;
+      socket.emit('mod-status', false);
+      const fail = await recordAuthFailure(ip);
+      if (fail.blocked) {
+        socket.emit('room-blocked', { reason: 'banned', redirect: '' });
+        socket.disconnect(true);
+      }
+    }
   });
 
   socket.on('mod-badge', async (data) => {
