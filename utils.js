@@ -11,6 +11,7 @@
 const crypto = require('crypto');
 
 const HASH_RE = /^[!-~]{16,128}$/;
+const ROOM_NAME_RE = /^[a-zA-Z0-9]{1,20}$/;
 
 const RESERVED_ROOM_NAMES = new Set([
   'api', 'admin', 'health', 'socket.io', 'socketio', 'favicon.ico', 'robots.txt',
@@ -30,6 +31,14 @@ function isReservedRoomName(room) {
   if (cleaned.startsWith('socket.io')) return true;
   const lastSegment = cleaned.split('/').filter(Boolean).pop() || '';
   return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
+}
+
+function isValidRoomName(room) {
+  if (!room || typeof room !== 'string') return false;
+  const cleaned = room.trim();
+  if (!ROOM_NAME_RE.test(cleaned)) return false;
+  if (isReservedRoomName(cleaned)) return false;
+  return true;
 }
 
 function b64url(buf) {
@@ -77,8 +86,10 @@ function logLine(ip, browser, room) {
 
 module.exports = {
   HASH_RE,
+  ROOM_NAME_RE,
   RESERVED_ROOM_NAMES,
   isReservedRoomName,
+  isValidRoomName,
   b64url,
   fromB64url,
   randomId,

@@ -253,6 +253,13 @@
                     <button class="btn" id="wlToggleBtn" style="background:var(--warning)">OFF - Normal</button>
                 </div>
             </div>
+
+            <div class="config-group">
+                <span class="config-label">🔒 Forcer salon /friends</span>
+                <div class="row">
+                    <button class="btn" id="forceFriendsBtn" style="background:#555">OFF - Normal</button>
+                </div>
+            </div>
         </div>
 
         <div class="actions-top">
@@ -403,6 +410,22 @@
             btn.textContent = config.whitelist_mode ? 'ON - Liste Blanche' : 'OFF - Normal';
             btn.style.background = config.whitelist_mode ? 'var(--success)' : 'var(--warning)';
             document.getElementById('redirInput').value = config.redirect_url || '';
+            const ffBtn = document.getElementById('forceFriendsBtn');
+            if (ffBtn) {
+                ffBtn.textContent = config.force_friends ? 'ON - /friends Forcé' : 'OFF - Normal';
+                ffBtn.style.background = config.force_friends ? 'var(--success)' : '#555';
+            }
+        }
+
+        async function toggleForceFriends() {
+            const btn = document.getElementById('forceFriendsBtn');
+            const current = btn.textContent.includes('ON');
+            await fetch('/admin/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ token: sessionToken, force_friends: !current })
+            });
+            loadData();
         }
 
         async function toggleWhitelistMode() {
@@ -603,6 +626,7 @@
         document.getElementById('deleteSelectedBtn').addEventListener('click', deleteSelected);
         document.getElementById('saveNotesBtn').addEventListener('click', saveNotes);
         document.getElementById('wlToggleBtn').addEventListener('click', toggleWhitelistMode);
+        document.getElementById('forceFriendsBtn').addEventListener('click', toggleForceFriends);
         document.getElementById('saveRedirBtn').addEventListener('click', saveRedir);
         document.getElementById('toggleExtra').addEventListener('change', toggleDetailed);
         document.getElementById('refreshBtn').addEventListener('click', loadData);

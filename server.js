@@ -56,8 +56,10 @@ const {
 
 const {
   HASH_RE,
+  ROOM_NAME_RE,
   RESERVED_ROOM_NAMES,
   isReservedRoomName,
+  isValidRoomName,
   b64url,
   fromB64url,
   randomId,
@@ -187,6 +189,16 @@ async function isIpBanned(ip) {
   if (!ip) return false;
   const access = await checkRoomAccess(ip);
   return !access.allowed && access.reason === 'banned';
+}
+
+async function isForceFriendsEnabled() {
+  const now = Date.now();
+  let cfg = cacheConfig.data;
+  if (!cfg || now > cacheConfig.exp) {
+    cfg = await store.hGetAll(KEY_CONFIG);
+    cacheConfig = { data: cfg, exp: now + 5000 };
+  }
+  return cfg && (cfg.force_friends === 'true' || cfg.force_friends === true);
 }
 
 /* ─────────── Limiteur d'authentification (Option 3 : strict 2 essais) ─────────── */
@@ -411,6 +423,7 @@ app.post('/admin/api/data', async (req, res) => {
     config: {
       whitelist_mode: rawConfig.whitelist_mode === 'true' || rawConfig.whitelist_mode === true,
       redirect_url: rawConfig.redirect_url || '',
+      force_friends: rawConfig.force_friends === 'true' || rawConfig.force_friends === true,
     },
   });
 });
@@ -424,6 +437,20 @@ app.post('/admin/api/config', async (req, res) => {
   }
   if (body.redirect_url !== undefined) {
     await store.hSet(KEY_CONFIG, 'redirect_url', cleanText(body.redirect_url, 512));
+  }
+  if (body.force_friends !== undefined) {
+    const enabled = body.force_friends === true || body.force_friends === 'true';
+    await store.hSet(KEY_CONFIG, 'force_friends', String(enabled));
+    if (typeof io !== 'undefined' && io) {
+      io.emit('mod-force-friends-status', { enabled });
+      if (enabled) {
+        for (const [roomId] of io.sockets.adapter.rooms.entries()) {
+          if (roomId.toLowerCase() !== 'friends' && !io.sockets.sockets.has(roomId)) {
+            io.to(roomId).emit('room-redirect', { url: '/friends' });
+          }
+        }
+      }
+    }
   }
   cacheConfig.exp = 0;
   res.json({ ok: true });
@@ -492,19 +519,31 @@ app.get('/:room/:file([a-zA-Z0-9_.-]+\\.[a-z0-9]{1,8})', (req, res, next) => {
   next();
 });
 
-app.get('/:room', (req, res) => {
+app.get('/:room', async (req, res) => {
   const room = decodeURIComponent(req.params.room || '').trim();
-  if (!room) return notFound(res, 404);
-  if (room.includes('/')) return notFound(res, 404);
-  if (isReservedRoomName(room)) return notFound(res, 404);
+  if (!isValidRoomName(room)) return notFound(res, 404);
+  if (await isForceFriendsEnabled()) {
+    if (room.toLowerCase() !== 'friends') {
+      return res.redirect(302, '/friends');
+    }
+  }
   res.sendFile(path.join(PUBLIC_DIR, 'room.html'));
 });
 
-app.get(/.*/, (req, res) => {
+app.get(/.*/, async (req, res) => {
   const last = req.path.split('/').pop() || '';
   if (/\.[a-z0-9]{1,8}$/i.test(last)) return notFound(res, 400);
   if (req.path.startsWith('/api/')) return notFound(res, 404);
   if (req.path.startsWith('/admin/')) return notFound(res, 404);
+  const cleanPath = req.path.replace(/^\/+|\/+$/g, '');
+  if (!cleanPath) return res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  if (cleanPath.includes('/')) return notFound(res, 404);
+  if (!isValidRoomName(cleanPath)) return notFound(res, 404);
+  if (await isForceFriendsEnabled()) {
+    if (cleanPath.toLowerCase() !== 'friends') {
+      return res.redirect(302, '/friends');
+    }
+  }
   res.sendFile(path.join(PUBLIC_DIR, 'room.html'));
 });
 
@@ -626,7 +665,9 @@ io.on('connection', (socket) => {
   const ip = clientIp(socket.request);
 
   socket.on('join-room', async (roomId) => {
-    const room = cleanText(roomId, 64) || 'friends';
+    let room = cleanText(roomId, 20) || 'friends';
+    if (!isValidRoomName(room)) room = 'friends';
+    if (await isForceFriendsEnabled()) room = 'friends';
 
     // Blacklist / liste blanche : refus avant de rejoindre la salle.
     const access = await checkRoomAccess(ip);
@@ -672,7 +713,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('profile-update', async (data, ack) => {
-    const room = cleanText(data && data.roomId, 64) || socket.data.room;
+    let room = cleanText(data && data.roomId, 20) || socket.data.room || 'friends';
+    if (!isValidRoomName(room)) room = 'friends';
+    if (await isForceFriendsEnabled()) room = 'friends';
     if (!room) { if (typeof ack === 'function') ack(); return; }
     const access = await checkRoomAccess(ip);
     if (!access.allowed) {
@@ -724,7 +767,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat-message', async (data) => {
-    const room = cleanText(data && data.roomId, 64) || socket.data.room;
+    let room = cleanText(data && data.roomId, 20) || socket.data.room || 'friends';
+    if (!isValidRoomName(room)) room = 'friends';
+    if (await isForceFriendsEnabled()) room = 'friends';
     if (!room) return;
     const access = await checkRoomAccess(ip);
     if (!access.allowed) {
@@ -808,6 +853,7 @@ io.on('connection', (socket) => {
       socket.data.isMod = true;
       socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
       socket.emit('mod-status', true);
+      socket.emit('mod-force-friends-status', { enabled: await isForceFriendsEnabled() });
     } else {
       socket.data.isMod = false;
       socket.emit('mod-status', false);
@@ -815,6 +861,27 @@ io.on('connection', (socket) => {
       if (fail.blocked) {
         socket.emit('room-blocked', { reason: 'banned', redirect: '' });
         socket.disconnect(true);
+      }
+    }
+  });
+
+  socket.on('mod-get-force-friends', async () => {
+    if (!isMod(socket)) return;
+    const enabled = await isForceFriendsEnabled();
+    socket.emit('mod-force-friends-status', { enabled });
+  });
+
+  socket.on('mod-set-force-friends', async (data) => {
+    if (!isMod(socket)) return;
+    const enabled = data && (data.enabled === true || data.enabled === 'true');
+    await store.hSet(KEY_CONFIG, 'force_friends', String(enabled));
+    cacheConfig.exp = 0;
+    io.emit('mod-force-friends-status', { enabled });
+    if (enabled) {
+      for (const [roomId] of io.sockets.adapter.rooms.entries()) {
+        if (roomId.toLowerCase() !== 'friends' && !io.sockets.sockets.has(roomId)) {
+          io.to(roomId).emit('room-redirect', { url: '/friends' });
+        }
       }
     }
   });

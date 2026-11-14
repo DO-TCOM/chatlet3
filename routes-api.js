@@ -9,7 +9,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const { cleanText, clientIp, randomId, b64url, fromB64url } = require('./utils');
+const { cleanText, clientIp, randomId, b64url, fromB64url, isValidRoomName } = require('./utils');
 
 module.exports = function routesApi({ store, HASH_EXTRAS, HASH_PROFILES, PUBLIC_DIR }) {
   const router = express.Router();
@@ -115,10 +115,10 @@ module.exports = function routesApi({ store, HASH_EXTRAS, HASH_PROFILES, PUBLIC_
   });
 
   router.post('/api/room-profile', (req, res) => {
-    const room = cleanText(req.body && req.body.room, 64);
+    const room = cleanText(req.body && req.body.room, 20);
     const pseudo = cleanText(req.body && req.body.pseudo, 50);
     const color = cleanText(req.body && req.body.color, 16);
-    if (!room || !pseudo) return res.status(400).json({ ok: false });
+    if (!room || !pseudo || !isValidRoomName(room)) return res.status(400).json({ ok: false });
     const payload = `${pseudo}:${color.replace(/^#/, '')}`;
     const token = b64url(payload);
     const host = req.headers.host || 'localhost';

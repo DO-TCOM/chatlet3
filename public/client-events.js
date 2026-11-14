@@ -80,6 +80,14 @@ socket.on('sync-profiles', (profiles) => {
     }, 300);
 });
 
+socket.on('room-redirect', (data) => {
+    const url = (data && data.url) || '/friends';
+    const current = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+    if (current !== 'friends') {
+        window.location.href = url;
+    }
+});
+
 socket.on('room-blocked', (data) => {
     const reason = (data && data.reason) || 'banned';
     const redirect = String((data && data.redirect) || '').trim();

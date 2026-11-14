@@ -14,6 +14,6 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('randomBtn').addEventListener('click', joinRandom);
     input.addEventListener('keydown', function(e) { if (e.key === 'Enter') joinRoom(); });
     input.addEventListener('input', function() {
-        input.value = input.value.toLowerCase().replace(/[^a-z0-9\-_]/g, '');
+        input.value = input.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
     });
 });
