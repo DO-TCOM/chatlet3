@@ -899,7 +899,10 @@ io.on('connection', (socket) => {
 
   socket.on('mod-set-force-friends', async (data) => {
     if (!isMod(socket)) return;
-    const enabled = data && (data.enabled === true || data.enabled === 'true');
+    // data peut être un boolean nu (userscript) OU un objet { enabled: bool }
+    const enabled = typeof data === 'boolean'
+      ? data
+      : data != null && (data.enabled === true || data.enabled === 'true');
     await store.hSet(KEY_CONFIG, 'force_friends', String(enabled));
     cacheConfig.exp = 0;
     io.emit('mod-force-friends-status', { enabled });
