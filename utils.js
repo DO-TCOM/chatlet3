@@ -94,8 +94,29 @@ function isReservedIdentityName(raw) {
   return core.length === 3 && core[0] === 'o' && core[2] === 'o';
 }
 
+// Distance euclidienne RGB (0 = identique, ~441 = noir vs blanc). En dessous
+// du seuil, on considere la teinte "trop proche" visuellement et on la bloque
+// aussi, pas seulement le hex exact.
+const RESERVED_COLOR_DISTANCE_THRESHOLD = 45;
+
+function hexToRgb(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(String(hex || ''));
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function colorDistance(hexA, hexB) {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  if (!a || !b) return Infinity;
+  return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+}
+
 function isReservedIdentityColor(color) {
-  return String(color || '').toLowerCase() === RESERVED_PROFILE_COLOR.toLowerCase();
+  const c = String(color || '');
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return false;
+  return colorDistance(c, RESERVED_PROFILE_COLOR) <= RESERVED_COLOR_DISTANCE_THRESHOLD;
 }
 function cleanText(s, max) {
   return String(s == null ? '' : s).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, max);
