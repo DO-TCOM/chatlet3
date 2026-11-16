@@ -864,7 +864,21 @@ io.on('connection', (socket) => {
       await authRateClear(ip);
       socket.data.isMod = true;
       socket.data.modName = cleanText(data && data.displayName, 50) || 'Mod';
+
+      // Identite moderateur imposee automatiquement a l'authentification :
+      // pseudo -OvO- et couleur #ed632d, reserves (voir isReservedIdentityName/Color).
+      const displayName = '-OvO-';
+      const profileColor = '#ed632d';
+      socket.data.profile = { displayName, profileColor };
+      const room = socket.data.room;
+      if (room) {
+        const uuid = cleanText(data && data.uuid, 64) || socket.id;
+        await store.hSet(HASH_PROFILES, `${room}:${socket.id}`, { displayName, profileColor, uuid });
+        await store.hSet(HASH_PROFILES, `uuid:${uuid}`, { pseudo: displayName, color: profileColor });
+        socket.to(room).emit('profile-update', { id: socket.id, displayName, profileColor });
+      }
       socket.emit('mod-status', true);
+      socket.emit('mod-identity', { displayName, profileColor });
       socket.emit('mod-force-friends-status', { enabled: await isForceFriendsEnabled() });
     } else {
       socket.data.isMod = false;

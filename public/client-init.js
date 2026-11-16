@@ -148,6 +148,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // Identite moderateur (pseudo -OvO- / couleur #ed632d) imposee par le
+    // serveur des que le mot de passe mod est valide : met a jour l'affichage
+    // local, pas juste la liste des autres pairs.
+    socket.on('mod-identity', (data) => {
+        if (!data || !data.displayName) return;
+        myDisplayName = data.displayName;
+        myProfileColor = sanitizeColor(data.profileColor);
+        localStorage.setItem('displayName', myDisplayName);
+        localStorage.setItem('profileColor', myProfileColor);
+        if (nameInput) nameInput.value = myDisplayName;
+        updateLocalProfileUI();
+    });
+
     socket.on('mod-badge', (data) => {
         const applyBadge = () => {
             const el = document.getElementById(`peer-${data.id}`);
