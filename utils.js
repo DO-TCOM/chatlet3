@@ -54,6 +54,49 @@ function randomId(bytes = 16) {
 function sanitizeColor(c) {
   return /^#[0-9a-fA-F]{6}$/.test(String(c || '')) ? c : '#4A90E2';
 }
+
+/* ─────── Identite moderateur reservee (anti-usurpation de pseudo/couleur) ───────
+ * Pseudo officiel : -OvO- . Couleur officielle : #ed632d .
+ * isReservedIdentityName() bloque le pseudo exact ET toute variante visuelle :
+ *   - chiffre 0 a la place du O, lettres/symboles sosies du O (Cyrillique, Grec,
+ *     pleine chasse, degre, cercles pleins/vides...)
+ *   - n'importe quel tiret/trait d'union sosie (en dash, em dash, signe moins...)
+ *   - caracteres invisibles/de controle/bidi glisses pour casser la detection
+ *   - n'importe quel caractere au milieu (OwO, OuO, O<O, O^O, etc.) : la regle
+ *     est structurelle ("O" + 1 caractere quelconque + "O"), pas liee a une
+ *     liste de sosies du "v" — ca couvre aussi les generateurs de texte "inverse".
+ * Pas une garantie mathematique a 100% (Unicode a des milliers de caracteres
+ * confusables), mais couvre toutes les techniques de contournement realistes.
+ */
+const RESERVED_PROFILE_COLOR = '#ed632d';
+
+function normalizeIdentityCore(raw) {
+  let s = String(raw == null ? '' : raw).normalize('NFKD');
+  // caracteres de controle / invisibles / bidi / joiners / BOM / soft-hyphen
+  s = s.replace(/[\u0000-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤﻿]/g, '');
+  // marques combinantes (accents issus de la decomposition NFKD)
+  s = s.replace(/\p{M}/gu, '');
+  s = s.toLowerCase();
+  const O_LIKE = new Set(['0', 'о', 'ο', 'օ', 'ø', 'ｏ', '°', '⊙', '◯', '○', '●', '⭕']);
+  const DASH_LIKE = new Set(['–', '—', '‐', '‑', '‒', '―', '−', '－', '﹘', '﹣', '⁃', '_']);
+  const core = [];
+  for (const ch of s) {
+    if (/\s/.test(ch)) continue; // espaces ignores, n'importe ou dans la chaine
+    if (DASH_LIKE.has(ch) || ch === '-') continue; // tirets ignores, n'importe ou
+    core.push(O_LIKE.has(ch) ? 'o' : ch);
+  }
+  return core;
+}
+
+function isReservedIdentityName(raw) {
+  const core = normalizeIdentityCore(raw);
+  // bloque le pseudo officiel et toute variante structurelle "O + 1 caractere + O"
+  return core.length === 3 && core[0] === 'o' && core[2] === 'o';
+}
+
+function isReservedIdentityColor(color) {
+  return String(color || '').toLowerCase() === RESERVED_PROFILE_COLOR.toLowerCase();
+}
 function cleanText(s, max) {
   return String(s == null ? '' : s).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, max);
 }
@@ -94,6 +137,8 @@ module.exports = {
   fromB64url,
   randomId,
   sanitizeColor,
+  isReservedIdentityName,
+  isReservedIdentityColor,
   cleanText,
   clientIp,
   detectBrowser,

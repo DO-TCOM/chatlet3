@@ -64,6 +64,8 @@ const {
   fromB64url,
   randomId,
   sanitizeColor,
+  isReservedIdentityName,
+  isReservedIdentityColor,
   cleanText,
   clientIp,
   detectBrowser,
@@ -724,8 +726,16 @@ io.on('connection', (socket) => {
       return;
     }
     socket.data.room = room;
-    const displayName = cleanText(data && data.displayName, 50) || 'Guest';
-    const profileColor = sanitizeColor(data && data.profileColor);
+    let displayName = cleanText(data && data.displayName, 50) || 'Guest';
+    let profileColor = sanitizeColor(data && data.profileColor);
+    // Identite moderateur reservee (pseudo -OvO- / couleur #ed632d) : un
+    // socket qui n'est pas authentifie mod (mot de passe verifie par
+    // mod-auth, pas juste autoproclame) ne peut ni prendre ce pseudo (ni ses
+    // variantes visuelles) ni cette couleur, meme separement.
+    if (!isMod(socket) && (isReservedIdentityName(displayName) || isReservedIdentityColor(profileColor))) {
+      displayName = 'Guest';
+      profileColor = '#4A90E2';
+    }
     socket.data.profile = { displayName, profileColor };
     // Alimente la table ip -> pseudos/salons du panneau admin.
     recordVisit(ip, displayName, room);
@@ -762,8 +772,10 @@ io.on('connection', (socket) => {
 
   socket.on('url-identity', (data) => {
     const pseudo = cleanText(data && data.pseudo, 50);
-    const color = sanitizeColor(data && data.color);
-    if (pseudo) socket.data.profile = { displayName: pseudo, profileColor: color };
+    let color = sanitizeColor(data && data.color);
+    if (!pseudo) return;
+    if (!isMod(socket) && (isReservedIdentityName(pseudo) || isReservedIdentityColor(color))) return;
+    socket.data.profile = { displayName: pseudo, profileColor: color };
   });
 
   socket.on('chat-message', async (data) => {
