@@ -735,6 +735,21 @@ io.on('connection', (socket) => {
     debugLog('join-room', { ip, room, socketId: socket.id, prevRoom: prev || null });
 
     socket.to(room).emit('user-connected', socket.id);
+    // Re-diffuse le profil juste apres la jointure effective (et pas seulement
+    // avant, dans profile-update) : si un membre deja present etait encore en
+    // cours de jointure au moment du 1er envoi (ex: plusieurs connexions/
+    // reconnexions simultanees, cache acces expire), il recoit ici un 2e
+    // signal, cote serveur, au lieu d'attendre le re-envoi tardif du nouveau
+    // client (qui ne se declenche qu'apres son propre sync-profiles) —
+    // corrige l'affichage "Guest" bleu transitoire en quelques ms au lieu de
+    // quelques secondes.
+    if (socket.data.profile && socket.data.profile.displayName) {
+      socket.to(room).emit('profile-update', {
+        id: socket.id,
+        displayName: socket.data.profile.displayName,
+        profileColor: socket.data.profile.profileColor,
+      });
+    }
 
     const profiles = await store.hGetAll(HASH_PROFILES);
     const live = io.sockets.adapter.rooms.get(room) || new Set();
