@@ -149,6 +149,10 @@ const KEY_LOGS = 'logs';
 const KEY_CONFIG = 'config';
 // Nombre maximum de lignes de logs conservees (voir store.lTrimLast).
 const LOGS_MAX_LINES = 5000;
+// Journal technique (connexions/deconnexions socket, erreurs, evictions) —
+// distinct de KEY_LOGS (visites HTTP). Voir server.js: debugLog().
+const KEY_DEBUG_LOGS = 'debug_logs';
+const DEBUG_LOGS_MAX_LINES = 3000;
 
 module.exports = {
   store,
@@ -164,4 +168,6 @@ module.exports = {
   KEY_LOGS,
   KEY_CONFIG,
   LOGS_MAX_LINES,
+  KEY_DEBUG_LOGS,
+  DEBUG_LOGS_MAX_LINES,
 };

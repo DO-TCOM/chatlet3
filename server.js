@@ -49,6 +49,8 @@ const {
   KEY_LOGS,
   KEY_CONFIG,
   LOGS_MAX_LINES,
+  KEY_DEBUG_LOGS,
+  DEBUG_LOGS_MAX_LINES,
 } = require('./storage');
 
 /* ─────────────────── Fonctions utilitaires ─────────────────── */
@@ -275,6 +277,35 @@ app.use((req, res, next) => {
 
 let logWritesSinceTrim = 0;
 
+/* ─────────── Journal technique (debug) ───────────
+   Trace les connexions/deconnexions socket, les rejets, les evictions de
+   session et les erreurs serveur non bloquantes — utile pour diagnostiquer
+   les bugs d'affichage (entree/sortie utilisateurs en double, etc.) sans
+   devoir reproduire le probleme en direct. Liste bornee (voir storage.js). */
+let debugWritesSinceTrim = 0;
+function debugLog(type, info) {
+  try {
+    const d = new Date();
+    const ts = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ` +
+      `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    const line = JSON.stringify({ ts, type, ...info });
+    store.rPush(KEY_DEBUG_LOGS, line).catch(() => {});
+    if (++debugWritesSinceTrim >= 20) {
+      debugWritesSinceTrim = 0;
+      store.lTrimLast(KEY_DEBUG_LOGS, DEBUG_LOGS_MAX_LINES).catch(() => {});
+    }
+  } catch (e) { /* jamais bloquant */ }
+}
+
+process.on('uncaughtException', (e) => {
+  console.error('[uncaughtException]', e);
+  debugLog('uncaughtException', { message: String(e && e.message), stack: String(e && e.stack).slice(0, 1000) });
+});
+process.on('unhandledRejection', (e) => {
+  console.error('[unhandledRejection]', e);
+  debugLog('unhandledRejection', { message: String(e && e.message), stack: String(e && e.stack).slice(0, 1000) });
+});
+
 app.use((req, res, next) => {
   res.on('finish', () => {
     if (req.path.startsWith('/socket.io')) return;
@@ -477,6 +508,20 @@ app.post('/admin/api/toggle', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/admin/api/debug-logs', async (req, res) => {
+  const token = cleanText(req.body && req.body.token, 128);
+  if (!(await isValidAdminToken(token))) return res.status(401).json({ ok: false });
+  const logs = await store.lRange(KEY_DEBUG_LOGS);
+  res.json({ ok: true, logs });
+});
+
+app.post('/admin/api/debug-logs-clear', async (req, res) => {
+  const token = cleanText(req.body && req.body.token, 128);
+  if (!(await isValidAdminToken(token))) return res.status(401).json({ ok: false });
+  await store.lSet(KEY_DEBUG_LOGS, []);
+  res.json({ ok: true });
+});
+
 app.post('/admin/api/delete', async (req, res) => {
   const token = cleanText(req.body && req.body.token, 128);
   if (!(await isValidAdminToken(token))) return res.status(401).json({ ok: false });
@@ -676,6 +721,7 @@ io.on('connection', (socket) => {
     if (!access.allowed) {
       // `until` (ban temporaire) est transmis pour que la victime puisse
       // afficher un decompte (« Reviens dans Xs ») au lieu d'un simple BAN.
+      debugLog('join-rejected', { ip, room, reason: access.reason, socketId: socket.id });
       socket.emit('room-blocked', { reason: access.reason, redirect: access.redirect, until: access.until });
       socket.disconnect(true);
       return;
@@ -686,6 +732,7 @@ io.on('connection', (socket) => {
 
     socket.data.room = room;
     await socket.join(room);
+    debugLog('join-room', { ip, room, socketId: socket.id, prevRoom: prev || null });
 
     socket.to(room).emit('user-connected', socket.id);
 
@@ -710,6 +757,7 @@ io.on('connection', (socket) => {
     const prev = socket.data.room;
     if (prev && prev === room) socket.data.room = null;
     await socket.leave(room);
+    debugLog('leave-room', { ip, room, socketId: socket.id });
     socket.to(room).emit('user-disconnected', socket.id);
     await store.hDel(HASH_PROFILES, `${room}:${socket.id}`);
   });
@@ -755,6 +803,7 @@ io.on('connection', (socket) => {
         let p = raw;
         try { p = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { continue; }
         if (p && p.uuid === uuid) {
+          debugLog('session-evicted', { ip, room, oldSocketId: oldId, newSocketId: socket.id, uuid });
           await store.hDel(HASH_PROFILES, key);
           socket.to(room).emit('user-disconnected', oldId);
           io.sockets.sockets.get(oldId)?.disconnect(true);
@@ -828,7 +877,12 @@ io.on('connection', (socket) => {
     const to = cleanText(data && data.to, 64);
     if (!to || !data.signal) return;
     const room = socket.data.room;
-    if (!room || !io.sockets.adapter.rooms.get(room)?.has(to)) return;
+    if (!room || !io.sockets.adapter.rooms.get(room)?.has(to)) {
+      // Cible deja partie (reconnexion/deconnexion entre-temps) : cause
+      // frequente de peers WebRTC qui restent affiches sans flux.
+      debugLog('signal-target-missing', { ip, room: room || null, from: socket.id, to });
+      return;
+    }
     io.to(to).emit('signal', { from: socket.id, signal: data.signal });
   });
 
@@ -985,9 +1039,10 @@ io.on('connection', (socket) => {
   socket.on('mod-spam-exempt', modAction('mod-spam-exempt'));
   socket.on('mod-spam-unexempt', modAction('mod-spam-unexempt'));
 
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', async (reason) => {
     mutedSockets.delete(socket.id);
     const room = socket.data.room;
+    debugLog('disconnect', { ip, room: room || null, socketId: socket.id, reason });
     if (!room) return;
     socket.to(room).emit('user-disconnected', socket.id);
     await store.hDel(HASH_PROFILES, `${room}:${socket.id}`);
